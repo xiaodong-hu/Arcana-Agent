@@ -1,5 +1,6 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 
@@ -8,11 +9,11 @@ use crate::theme::Theme;
 pub struct Composer {
     /// Current input text
     pub input: String,
-    /// Cursor position within the input
+    /// Cursor position (byte offset) within the input
     pub cursor_pos: usize,
     /// History of sent messages (for recall with ↑)
     pub history: Vec<String>,
-    /// Current history index (-1 = current input)
+    /// Current history index
     pub history_index: Option<usize>,
     /// Whether the first-use hint should be shown
     pub show_hint: bool,
@@ -42,15 +43,23 @@ impl Composer {
         self.show_hint = false;
     }
 
-    /// Insert a newline at the cursor position.
+    /// Insert a tab (4 spaces) at the cursor position.
+    pub fn insert_tab(&mut self) {
+        self.input.insert_str(self.cursor_pos, "    ");
+        self.cursor_pos += 4;
+        self.show_hint = false;
+    }
+
+    /// Insert a newline at the cursor position (Ctrl+Enter).
     pub fn insert_newline(&mut self) {
-        self.insert_char('\n');
+        self.input.insert(self.cursor_pos, '\n');
+        self.cursor_pos += 1;
+        self.show_hint = false;
     }
 
     /// Delete the character before the cursor.
     pub fn backspace(&mut self) {
         if self.cursor_pos > 0 {
-            // Find the previous char boundary
             let prev = self.input[..self.cursor_pos]
                 .char_indices()
                 .last()
@@ -73,7 +82,7 @@ impl Composer {
         }
     }
 
-    /// Move cursor left.
+    /// Move cursor left by one character.
     pub fn move_left(&mut self) {
         if self.cursor_pos > 0 {
             self.cursor_pos = self.input[..self.cursor_pos]
@@ -84,7 +93,7 @@ impl Composer {
         }
     }
 
-    /// Move cursor right.
+    /// Move cursor right by one character.
     pub fn move_right(&mut self) {
         if self.cursor_pos < self.input.len() {
             self.cursor_pos = self.input[self.cursor_pos..]
@@ -92,6 +101,27 @@ impl Composer {
                 .nth(1)
                 .map(|(i, _)| self.cursor_pos + i)
                 .unwrap_or(self.input.len());
+        }
+    }
+
+    /// Move cursor to start of current line.
+    pub fn move_home(&mut self) {
+        // Find the start of the current line
+        let before = &self.input[..self.cursor_pos];
+        if let Some(nl) = before.rfind('\n') {
+            self.cursor_pos = nl + 1;
+        } else {
+            self.cursor_pos = 0;
+        }
+    }
+
+    /// Move cursor to end of current line.
+    pub fn move_end(&mut self) {
+        let after = &self.input[self.cursor_pos..];
+        if let Some(nl) = after.find('\n') {
+            self.cursor_pos += nl;
+        } else {
+            self.cursor_pos = self.input.len();
         }
     }
 
@@ -134,86 +164,120 @@ impl Composer {
 
     /// Get the number of lines in the input.
     pub fn line_count(&self) -> usize {
-        self.input.lines().count().max(1)
+        if self.input.is_empty() { 1 } else { self.input.lines().count().max(1) }
     }
 
     /// Calculate the height needed for the composer.
     pub fn height(&self) -> u16 {
         let lines = self.line_count().min(10) as u16;
-        lines + 2 // +2 for borders
+        lines + 1 // +1 for top border
+    }
+
+    /// Get the current line and column (visual width) of the cursor.
+    fn cursor_line_col(&self) -> (usize, u16) {
+        let before_cursor = &self.input[..self.cursor_pos];
+        let line = before_cursor.matches('\n').count();
+        let line_start = before_cursor.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let col_text = &self.input[line_start..self.cursor_pos];
+        let col = UnicodeWidthStr::width(col_text) as u16;
+        (line, col)
     }
 
     /// Render the composer.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::default()
-            .borders(Borders::TOP);
-
+        let block = Block::default().borders(Borders::TOP);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
         let in_slash_mode = self.input.starts_with('/');
         let prompt = if in_slash_mode { "/ " } else { "❯ " };
+        let prompt_width = UnicodeWidthStr::width(prompt) as u16;
 
-        // Build display content
-        let display_content: &str = if self.input.is_empty() && self.show_hint {
-            "[type / for commands, or enter message]"
-        } else if in_slash_mode {
-            &self.input[1..] // show without the leading /
-        } else {
-            &self.input
-        };
+        if self.input.is_empty() && self.show_hint {
+            // Show hint
+            let line = Line::from(vec![
+                Span::styled(prompt, theme.prompt_glyph),
+                Span::styled("[type / for commands, or enter message]", theme.dim),
+            ]);
+            frame.render_widget(Paragraph::new(line), inner);
+            frame.set_cursor_position(Position::new(inner.x + prompt_width, inner.y));
+            return;
+        }
 
-        let content_style = if self.input.is_empty() && self.show_hint {
-            theme.dim
-        } else if in_slash_mode {
+        // Build lines for multiline display
+        let display_text = if in_slash_mode { &self.input[1..] } else { &self.input };
+        let content_style = if in_slash_mode {
             Style::default().fg(Color::Cyan)
         } else {
             Style::default().fg(Color::White)
         };
-
         let prompt_style = if in_slash_mode {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             theme.prompt_glyph
         };
 
-        // Main input line
-        let mut spans = vec![
-            Span::styled(prompt, prompt_style),
-            Span::styled(display_content.to_string(), content_style),
-        ];
+        let text_lines: Vec<&str> = if display_text.is_empty() {
+            vec![""]
+        } else {
+            display_text.split('\n').collect()
+        };
 
-        // Slash command hints (shown inline when in slash mode and input is short)
-        if in_slash_mode && self.input.len() <= 6 {
-            let hint = match self.input.as_str() {
-                "/" => " quit · help · model · mode · clear · status",
-                "/q" | "/qu" | "/qui" | "/quit" => " ← exit session",
-                "/h" | "/he" | "/hel" | "/help" => " ← show commands",
-                "/mo" | "/mod" | "/mode" => " ← switch mode",
-                "/m" | "/model" => " ← change model",
-                "/c" | "/cl" | "/cle" | "/clea" | "/clear" => " ← clear viewport",
-                "/s" | "/st" | "/sta" | "/stat" | "/statu" | "/status" => " ← show status",
-                _ => "",
-            };
-            if !hint.is_empty() {
-                spans.push(Span::styled(hint.to_string(), theme.dim));
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, line_text) in text_lines.iter().enumerate() {
+            let mut spans = Vec::new();
+            if i == 0 {
+                spans.push(Span::styled(prompt, prompt_style));
+            } else {
+                spans.push(Span::styled("  ", Style::default())); // continuation indent
             }
+            spans.push(Span::styled(line_text.to_string(), content_style));
+
+            // Slash command hints on first line
+            if i == 0 && in_slash_mode && self.input.len() <= 7 {
+                let hint = slash_hint(&self.input);
+                if !hint.is_empty() {
+                    spans.push(Span::styled(
+                        hint.to_string(),
+                        Style::default().fg(Color::Rgb(255, 126, 0)), // Amber #FF7E00
+                    ));
+                }
+            }
+            lines.push(Line::from(spans));
         }
 
-        let paragraph = Paragraph::new(Line::from(spans));
+        let paragraph = Paragraph::new(lines);
         frame.render_widget(paragraph, inner);
 
-        // Set cursor position
-        let cursor_offset = if in_slash_mode {
-            self.cursor_pos - 1 // account for hidden /
+        // Calculate cursor position using unicode width
+        let (cursor_line, cursor_col) = self.cursor_line_col();
+        // Adjust for the hidden '/' in slash mode
+        let adjusted_col = if in_slash_mode && cursor_line == 0 {
+            // cursor_col includes the '/', subtract 1 char width
+            cursor_col.saturating_sub(1)
         } else {
-            self.cursor_pos
+            cursor_col
         };
-        let cursor_x = inner.x + prompt.len() as u16 + cursor_offset as u16;
-        let cursor_y = inner.y;
+
+        let cursor_x = inner.x + prompt_width + adjusted_col;
+        let cursor_y = inner.y + cursor_line as u16;
         frame.set_cursor_position(Position::new(
             cursor_x.min(inner.x + inner.width - 1),
-            cursor_y,
+            cursor_y.min(inner.y + inner.height - 1),
         ));
+    }
+}
+
+/// Get slash command hint text.
+fn slash_hint(input: &str) -> &'static str {
+    match input {
+        "/" => " quit · help · mode · clear · status",
+        "/q" | "/qu" | "/qui" | "/quit" => " ← exit session",
+        "/h" | "/he" | "/hel" | "/help" => " ← show commands",
+        "/mo" | "/mod" | "/mode" => " ← switch mode",
+        "/m" | "/model" => " ← change model",
+        "/c" | "/cl" | "/cle" | "/clea" | "/clear" => " ← clear viewport",
+        "/s" | "/st" | "/sta" | "/stat" | "/statu" | "/status" => " ← show status",
+        _ => "",
     }
 }

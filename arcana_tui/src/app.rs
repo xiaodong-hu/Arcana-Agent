@@ -96,6 +96,7 @@ impl App {
                 // this handles the case where composer is empty (no-op)
             }
             KeyAction::Newline => { self.composer.insert_newline(); }
+            KeyAction::Tab => { self.composer.insert_tab(); }
             KeyAction::Backspace => { self.composer.backspace(); }
             KeyAction::Delete => { self.composer.delete(); }
             KeyAction::Left => { self.composer.move_left(); }
@@ -128,29 +129,26 @@ impl App {
 
     fn handle_overlay_key(&mut self, action: KeyAction) {
         match action {
-            KeyAction::Char('q') if self.overlay.composer.is_empty() => {
-                self.overlay.hide();
-                self.mode = ViewMode::Main;
-            }
             KeyAction::Escape => {
                 self.overlay.hide();
                 self.mode = ViewMode::Main;
             }
+            KeyAction::Expand => {
+                // Ctrl+O: toggle thinking in overlay
+                self.overlay.toggle_thinking();
+            }
             KeyAction::Char(c) => { self.overlay.composer.insert_char(c); }
+            KeyAction::Tab => { self.overlay.composer.insert_tab(); }
             KeyAction::Enter => {
-                if !self.overlay.composer.is_empty() {
-                    let input = self.overlay.composer.take_input();
-                    self.overlay.messages.push(Message {
-                        role: MessageRole::User,
-                        content: input,
-                        timestamp: chrono::Utc::now(),
-                        thinking: None,
-                        tool_calls: Vec::new(),
-                    });
-                }
+                // Enter sends the query — handled in event loop
             }
             KeyAction::Newline => { self.overlay.composer.insert_newline(); }
             KeyAction::Backspace => { self.overlay.composer.backspace(); }
+            KeyAction::Delete => { self.overlay.composer.delete(); }
+            KeyAction::Left => { self.overlay.composer.move_left(); }
+            KeyAction::Right => { self.overlay.composer.move_right(); }
+            KeyAction::Home => { self.overlay.composer.move_home(); }
+            KeyAction::End => { self.overlay.composer.move_end(); }
             KeyAction::Interrupt => { self.overlay.composer.clear(); }
             _ => {}
         }
@@ -331,7 +329,27 @@ pub async fn interactive(
                                 app.handle_main_key(action);
                             }
                         }
-                        ViewMode::QueryOverlay => app.handle_overlay_key(action),
+                        ViewMode::QueryOverlay => {
+                            // Handle Enter for overlay LLM dispatch
+                            if action == KeyAction::Enter && !app.overlay.composer.is_empty() {
+                                let input = app.overlay.composer.take_input();
+                                app.overlay.messages.push(Message {
+                                    role: MessageRole::User,
+                                    content: input.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                    thinking: None,
+                                    tool_calls: Vec::new(),
+                                });
+                                app.overlay.is_streaming = true;
+
+                                let msgs = app.overlay.build_messages();
+                                crate::llm::spawn_overlay_stream(
+                                    &config, msgs, event_tx.clone()
+                                );
+                            } else {
+                                app.handle_overlay_key(action);
+                            }
+                        }
                         ViewMode::DiffReview => {}
                     }
                 }
@@ -376,6 +394,27 @@ pub async fn interactive(
                 AppEvent::Tick => {
                     let now = chrono::Utc::now();
                     app.toasts.retain(|t| (now - t.created_at).num_seconds() < 5);
+                }
+                // Overlay (query agent) events
+                AppEvent::OverlayToken(token) => {
+                    if let Some(think_text) = token.strip_prefix("\x00THINK:") {
+                        app.overlay.append_think_token(think_text);
+                    } else {
+                        app.overlay.append_token(&token);
+                    }
+                }
+                AppEvent::OverlayThinkStart => { app.overlay.start_thinking(); }
+                AppEvent::OverlayThinkEnd => { app.overlay.end_thinking(); }
+                AppEvent::OverlayResponseComplete => { app.overlay.finalize_response(); }
+                AppEvent::OverlayError(msg) => {
+                    app.overlay.is_streaming = false;
+                    app.overlay.messages.push(Message {
+                        role: MessageRole::System,
+                        content: format!("⚠ {}", msg),
+                        timestamp: chrono::Utc::now(),
+                        thinking: None,
+                        tool_calls: Vec::new(),
+                    });
                 }
                 _ => {}
             }

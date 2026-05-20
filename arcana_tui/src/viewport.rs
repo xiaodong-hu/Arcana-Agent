@@ -2,7 +2,45 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::theme::Theme;
-use crate::types::{Message, MessageRole, ThinkingBlock, ToolCall};
+use crate::types::{Message, MessageRole, ThinkingBlock};
+
+/// Bleu de France color for inline code highlighting
+const BLEU_DE_FRANCE: Color = Color::Rgb(49, 140, 231); // #318CE7
+
+/// Parse a line of text, highlighting `backtick content` in Bleu de France.
+fn styled_line<'a>(text: &str, base_style: Style) -> Line<'a> {
+    let mut spans: Vec<Span<'a>> = Vec::new();
+    let mut rest = text;
+
+    while let Some(start) = rest.find('`') {
+        // Text before the backtick
+        if start > 0 {
+            spans.push(Span::styled(rest[..start].to_string(), base_style));
+        }
+        let after_tick = &rest[start + 1..];
+        if let Some(end) = after_tick.find('`') {
+            // Found closing backtick
+            let code = &after_tick[..end];
+            spans.push(Span::styled(
+                format!("`{}`", code),
+                Style::default().fg(BLEU_DE_FRANCE),
+            ));
+            rest = &after_tick[end + 1..];
+        } else {
+            // No closing backtick, render rest as-is
+            spans.push(Span::styled(rest[start..].to_string(), base_style));
+            rest = "";
+            break;
+        }
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_string(), base_style));
+    }
+    if spans.is_empty() {
+        spans.push(Span::styled(String::new(), base_style));
+    }
+    Line::from(spans)
+}
 
 /// Viewport state: manages scroll position and message rendering.
 #[derive(Debug)]
@@ -217,10 +255,10 @@ impl Viewport {
                                 Span::styled("ctrl+o to collapse", Style::default().fg(Color::DarkGray)),
                             ]));
                             for line in think.content.lines() {
-                                lines.push(Line::from(Span::styled(
-                                    format!("  {}", line),
+                                lines.push(styled_line(
+                                    &format!("  {}", line),
                                     theme.thinking_block,
-                                )));
+                                ));
                             }
                         }
                     }
@@ -234,7 +272,7 @@ impl Viewport {
 
                     // Render response content
                     for line in msg.content.lines() {
-                        lines.push(Line::from(Span::styled(line.to_string(), theme.agent_response)));
+                        lines.push(styled_line(line, theme.agent_response));
                     }
                     lines.push(Line::from(""));
                 }
@@ -270,7 +308,7 @@ impl Viewport {
             // Streaming response text
             if !self.streaming_text.is_empty() {
                 for line in self.streaming_text.lines() {
-                    lines.push(Line::from(Span::styled(line.to_string(), theme.agent_response)));
+                    lines.push(styled_line(line, theme.agent_response));
                 }
             }
         }

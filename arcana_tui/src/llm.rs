@@ -6,8 +6,7 @@ use crate::config::Config;
 use crate::event::AppEvent;
 use crate::types::ResponseStats;
 
-/// Spawn a streaming LLM request. Sends AppEvents (ThinkStart, Token, ThinkEnd, ResponseComplete)
-/// back through the provided sender.
+/// Spawn a streaming LLM request for the main agent.
 pub fn spawn_stream(
     config: &Config,
     messages: Vec<serde_json::Value>,
@@ -16,23 +15,45 @@ pub fn spawn_stream(
     let provider = config.agents.main.provider.clone();
     let model = config.agents.main.model.clone();
     let thinking = config.agents.main.thinking.clone();
-
     let api_key = config.resolve_api_key(&provider).unwrap_or_default();
-    let base_url = match provider.as_str() {
-        "deepseek" => {
-            let url = &config.providers.deepseek.base_url;
-            if url.is_empty() { "https://api.deepseek.com".to_string() } else { url.clone() }
-        }
-        _ => "https://api.deepseek.com".to_string(),
-    };
+    let base_url = resolve_base_url(config, &provider);
 
     tokio::spawn(async move {
-        if let Err(e) = do_stream(&base_url, &api_key, &model, &thinking, &messages, &tx).await {
+        if let Err(e) = do_stream(&base_url, &api_key, &model, &thinking, &messages, &tx, false).await {
             let _ = tx.send(AppEvent::LlmError(crate::types::LlmError::NetworkError {
                 message: e.to_string(),
             }));
         }
     });
+}
+
+/// Spawn a streaming LLM request for the query overlay agent.
+pub fn spawn_overlay_stream(
+    config: &Config,
+    messages: Vec<serde_json::Value>,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) {
+    let provider = config.agents.query.provider.clone();
+    let model = config.agents.query.model.clone();
+    let thinking = config.agents.query.thinking.clone();
+    let api_key = config.resolve_api_key(&provider).unwrap_or_default();
+    let base_url = resolve_base_url(config, &provider);
+
+    tokio::spawn(async move {
+        if let Err(e) = do_stream(&base_url, &api_key, &model, &thinking, &messages, &tx, true).await {
+            let _ = tx.send(AppEvent::OverlayError(e.to_string()));
+        }
+    });
+}
+
+fn resolve_base_url(config: &Config, provider: &str) -> String {
+    match provider {
+        "deepseek" => {
+            let url = &config.providers.deepseek.base_url;
+            if url.is_empty() { "https://api.deepseek.com".to_string() } else { url.clone() }
+        }
+        _ => "https://api.deepseek.com".to_string(),
+    }
 }
 
 async fn do_stream(
@@ -42,6 +63,7 @@ async fn do_stream(
     thinking: &crate::config::ThinkingConfig,
     messages: &[serde_json::Value],
     tx: &mpsc::UnboundedSender<AppEvent>,
+    is_overlay: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut body = serde_json::json!({
         "model": model,
@@ -78,57 +100,72 @@ async fn do_stream(
         let chunk = chunk?;
         buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-        // Process complete SSE lines
         while let Some(line_end) = buffer.find('\n') {
             let line = buffer[..line_end].trim_end_matches('\r').to_string();
             buffer = buffer[line_end + 1..].to_string();
 
-            if line.is_empty() {
-                continue;
-            }
+            if line.is_empty() { continue; }
             if line == "data: [DONE]" {
-                // Stream complete
-                let stats = usage_data.map(|u| ResponseStats {
-                    input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as usize,
-                    output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as usize,
-                    cost: 0.0,
-                    duration_secs: 0.0,
-                });
-                let _ = tx.send(AppEvent::ResponseComplete(stats));
+                if is_overlay {
+                    let _ = tx.send(AppEvent::OverlayResponseComplete);
+                } else {
+                    let stats = usage_data.map(|u| ResponseStats {
+                        input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as usize,
+                        output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as usize,
+                        cost: 0.0,
+                        duration_secs: 0.0,
+                    });
+                    let _ = tx.send(AppEvent::ResponseComplete(stats));
+                }
                 return Ok(());
             }
             if let Some(json_str) = line.strip_prefix("data: ") {
                 if let Ok(data) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    // Extract usage if present
-                    if let Some(usage) = data.get("usage") {
-                        if !usage.is_null() {
-                            usage_data = Some(usage.clone());
+                    if !is_overlay {
+                        if let Some(usage) = data.get("usage") {
+                            if !usage.is_null() {
+                                usage_data = Some(usage.clone());
+                            }
                         }
                     }
 
                     if let Some(delta) = data["choices"].get(0).and_then(|c| c.get("delta")) {
-                        // Handle reasoning_content (thinking)
                         if let Some(reasoning) = delta.get("reasoning_content") {
                             if let Some(text) = reasoning.as_str() {
                                 if !text.is_empty() {
                                     if !in_thinking {
                                         in_thinking = true;
-                                        let _ = tx.send(AppEvent::ThinkStart);
+                                        let _ = tx.send(if is_overlay {
+                                            AppEvent::OverlayThinkStart
+                                        } else {
+                                            AppEvent::ThinkStart
+                                        });
                                     }
-                                    let _ = tx.send(AppEvent::Token(format!("\x00THINK:{}", text)));
+                                    let _ = tx.send(if is_overlay {
+                                        AppEvent::OverlayToken(format!("\x00THINK:{}", text))
+                                    } else {
+                                        AppEvent::Token(format!("\x00THINK:{}", text))
+                                    });
                                 }
                             }
                         }
 
-                        // Handle content
                         if let Some(content) = delta.get("content") {
                             if let Some(text) = content.as_str() {
                                 if !text.is_empty() {
                                     if in_thinking {
                                         in_thinking = false;
-                                        let _ = tx.send(AppEvent::ThinkEnd);
+                                        let _ = tx.send(if is_overlay {
+                                            AppEvent::OverlayThinkEnd
+                                        } else {
+                                            AppEvent::ThinkEnd
+                                        });
                                     }
-                                    let _ = tx.send(AppEvent::Token(text.to_string()));
+                                    let _ = tx.send(if is_overlay {
+                                        AppEvent::OverlayToken(text.to_string())
+                                    } else {
+                                        AppEvent::Token(text.to_string())
+                                    });
                                 }
                             }
                         }
@@ -138,16 +175,19 @@ async fn do_stream(
         }
     }
 
-    // If stream ended without [DONE]
     if in_thinking {
-        let _ = tx.send(AppEvent::ThinkEnd);
+        let _ = tx.send(if is_overlay { AppEvent::OverlayThinkEnd } else { AppEvent::ThinkEnd });
     }
-    let stats = usage_data.map(|u| ResponseStats {
-        input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as usize,
-        output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as usize,
-        cost: 0.0,
-        duration_secs: 0.0,
-    });
-    let _ = tx.send(AppEvent::ResponseComplete(stats));
+    if is_overlay {
+        let _ = tx.send(AppEvent::OverlayResponseComplete);
+    } else {
+        let stats = usage_data.map(|u| ResponseStats {
+            input_tokens: u["prompt_tokens"].as_u64().unwrap_or(0) as usize,
+            output_tokens: u["completion_tokens"].as_u64().unwrap_or(0) as usize,
+            cost: 0.0,
+            duration_secs: 0.0,
+        });
+        let _ = tx.send(AppEvent::ResponseComplete(stats));
+    }
     Ok(())
 }

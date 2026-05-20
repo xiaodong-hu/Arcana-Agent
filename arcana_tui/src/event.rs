@@ -24,6 +24,12 @@ pub enum AppEvent {
     LlmError(crate::types::LlmError),
     /// Tick (for animations and elapsed time updates)
     Tick,
+    // --- Overlay (query agent) events ---
+    OverlayToken(String),
+    OverlayThinkStart,
+    OverlayThinkEnd,
+    OverlayResponseComplete,
+    OverlayError(String),
 }
 
 /// Spawn the terminal event reader task.
@@ -130,8 +136,9 @@ pub fn classify_key(key: &KeyEvent) -> KeyAction {
             KeyAction::Freeze
         }
 
-        // Alt+Enter for newline
+        // Alt+Enter or Ctrl+Enter for newline
         (m, KeyCode::Enter) if m.contains(KeyModifiers::ALT) => KeyAction::Newline,
+        (m, KeyCode::Enter) if m.contains(KeyModifiers::CONTROL) => KeyAction::Newline,
 
         // Basic keys
         (_, KeyCode::Enter) => KeyAction::Enter,

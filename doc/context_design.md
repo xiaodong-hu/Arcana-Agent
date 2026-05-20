@@ -1,33 +1,138 @@
-# Harness Design --- Agent to LLM Interactive
+# Harness Design — Agent to LLM Interactive
 
 ## 1. Context Management
 
-### 1.1 Interfact Exposed to LLMs
-To reduce the waste of context for LLM to "guess" what is on hand, what is doable, and to avoid many trials block by the rust-managed authority program, the agent would always start dialogue with telling of what kind of registered and authoritzed tools/network commands etc are doable for current dialogue. Also LLM should be able to send a query of list of what is loaded/registered/authorized.
+### 1.1 Interface Exposed to LLMs
 
-These hard-coded header should include:
-- authorized system tools/commands
-- authorized network tools (such as `wget` or `curl`)
-- authorized user-skill defined tools/commands
+To reduce the waste of context for LLM to "guess" what is on hand, what is doable, and to avoid many trials blocked by the rust-managed authority program, the agent always starts dialogue by telling what kind of registered and authorized tools/network commands etc are doable for current dialogue. LLM should also be able to send a query of list of what is loaded/registered/authorized.
+
+These hard-coded headers include:
+- Authorized system tools/commands (from `~/.arcana/authority.toml`)
+- Authorized network tools (e.g., `wget`, `curl`, API endpoints)
+- Authorized user-skill defined tools/commands (from `~/.arcana/skills/`)
+- File system scope (writable, readonly, denied paths)
 
 ### 1.2 Long-term Memory Exposed to LLMs
-All long-term system memory should be append to the context to the head of session (only once). It includes `SOUL.md`, `USER.md` etc.
-An explicit API interface to query and write the long-term knowledge/error vector database should also be explicitly exposed to LLMs.
 
+All long-term system memory is appended to the context at the head of session (only once):
+- `SOUL.md` — agent personality and behavior constraints
+- `USER.md` — user portrait (auto-populated from interactions)
+- Project-level `.arcana/PROJECT.md` — project-specific context
 
-### 1.2 Contex Window Exposed to LLMs
-To reduce the waste usage of token, the project memory (markdown file), and interfac to query and write session vector memory should also be explicitly exposed to LLMs.
+An explicit API interface to query and write the long-term knowledge/error vector database is also exposed to LLMs.
 
-Another important thing is the thinking chain, I would like to further maintain the thinking chain as some `thinking_chain` vector memory database for each project. LLM can decide which to write and query for that (this needs change to the memory architecture)
+### 1.3 Context Window Management
 
+To reduce token waste:
+- Project memory (markdown files) and interface to query/write session vector memory are explicitly exposed
+- Thinking chains are maintained as a `thinking_chain` vector memory database per project
+- LLM can decide which thinking chains to write and query (requires change to memory architecture)
+- Conversation history includes `reasoning_content` for DeepSeek prefix cache hits
 
-## Mode Design (toggled with `/mode`)
+### 1.4 Thinking Chain Memory
+
+The thinking chain is critical for DeepSeek's context caching:
+- All `reasoning_content` from responses is stored in conversation history
+- This enables prefix cache hits on subsequent requests (same thinking prefix = cached)
+- Thinking chains are also persisted to a per-project vector DB for cross-session recall
+- LLM can query previous thinking chains for similar problems
+
+---
+
+## 2. Mode Design (toggled with `/mode`)
+
 ### Ask Mode
-The authority program should add this mode so that, NO mutation can be made by LLMs, it can only read projects, extra files, and use web tools. Project and session memory should be loaded as well.
+- Authority program enforces: **NO mutations** can be made by LLMs
+- Can only read projects, extra files, and use web tools
+- Project and session memory are loaded
+- Useful for code review, explanation, and research
 
-### Agent Mode
-Normal Mode
-
+### Agent Mode (default)
+- Full agent capabilities within authority constraints
+- Can read/write files, execute authorized commands, spawn sub-agents
+- All mutations are recorded in `git_record`
 
 ### Plan Mode
-TODO!
+- LLM produces a structured plan (task list) without executing
+- Plan can be reviewed, edited, then executed in Agent mode
+- Useful for complex multi-step tasks where user wants oversight
+
+---
+
+## 3. Authority Constraints
+
+### 3.1 Command Authorization (`~/.arcana/authority.toml`)
+
+```toml
+[commands]
+allow = ["cargo build", "cargo test", "git status", "ls", "cat", ...]
+confirm = ["git push", "git commit", "rm -rf", "sudo *"]
+
+[network]
+allow = ["api.deepseek.com", "api.openai.com"]
+deny = ["*"]
+
+[filesystem]
+writable = ["."]
+readonly = ["/etc", "/usr"]
+deny = ["~/.ssh", "~/.gnupg"]
+```
+
+### 3.2 Sub-agent Constraints
+
+- Sub-agents inherit the parent's authority scope (cannot escalate)
+- Query agent (overlay) is **forbidden from spawning further sub-agents**
+- Sub-agents have scoped filesystem access (only their assigned directory)
+- Sub-agent spawning from within a sub-agent is forbidden by the authority program
+
+### 3.3 Hot-reload
+
+Authority config is hot-reloadable:
+- Edit `~/.arcana/authority.toml` and changes take effect immediately
+- `arcana auth allow/deny/revoke/reset` for CLI management
+- Skills are similarly hot-loadable from `~/.arcana/skills/`
+
+---
+
+## 4. Agent Hierarchy & Context Isolation
+
+```
+Main Agent (deepseek-v4-pro)
+├── Full context: SOUL.md + USER.md + PROJECT.md + conversation + memory
+├── Can spawn sub-agents
+├── Can use query agent overlay
+│
+├── Query Agent (persistent, overlay via ?)
+│   ├── Shares main agent's context window (read-only)
+│   ├── Has own conversation history
+│   ├── Thinking chain with Ctrl+O expand/collapse
+│   ├── CANNOT spawn sub-agents (authority constraint)
+│   └── Uses agents.query config (model/thinking)
+│
+└── Sub-Agents (spawned, scoped)
+    ├── Scoped filesystem access
+    ├── Own conversation context
+    ├── Checkpointable, freezable, resumable
+    ├── CANNOT spawn further sub-agents (authority constraint)
+    └── Use agents.sub config (model/thinking)
+```
+
+---
+
+## 5. Session & Thinking Chain Persistence
+
+### Session Memory
+- Full conversation history (user + assistant + reasoning_content)
+- Stored per-session with session ID
+- Resumable via `arcana resume --last` or `arcana resume <id>`
+
+### Thinking Chain Database
+- Per-project vector DB of thinking chains
+- Indexed by: problem description, file paths involved, outcome
+- LLM can query: "have I solved something similar before?"
+- Enables cross-session learning without full context replay
+
+### Error Pattern Memory
+- Failed approaches are recorded with context
+- LLM is informed of previous failures for similar problems
+- Prevents repeating the same mistake across sessions

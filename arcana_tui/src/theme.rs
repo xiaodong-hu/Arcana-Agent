@@ -34,7 +34,7 @@ impl Theme {
                 .add_modifier(Modifier::BOLD),
             agent_response: Style::default().fg(Color::White),
             thinking_block: Style::default()
-                .fg(Color::DarkGray)
+                .fg(Color::Rgb(140, 140, 160)) // lighter gray, visible on transparent terminals
                 .add_modifier(Modifier::ITALIC),
             tool_call: Style::default().fg(Color::Cyan),
             error: Style::default().fg(Color::Red),
