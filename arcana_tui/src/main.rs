@@ -3,6 +3,7 @@ mod banner;
 mod cli;
 mod config;
 mod event;
+mod llm;
 mod onboard;
 mod status_bar;
 mod theme;
@@ -130,10 +131,190 @@ mod session_cmd {
 }
 
 mod auth_cmd {
-    use crate::cli::AuthArgs;
+    use crate::cli::{AuthArgs, AuthAction};
+    use serde::{Deserialize, Serialize};
+    use std::path::PathBuf;
 
-    pub async fn run(_args: AuthArgs) -> Result<(), Box<dyn std::error::Error>> {
-        eprintln!("Auth management not yet implemented.");
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    pub struct AuthorityConfig {
+        #[serde(default)]
+        pub commands: CommandsConfig,
+        #[serde(default)]
+        pub network: NetworkConfig,
+        #[serde(default)]
+        pub filesystem: FilesystemConfig,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct CommandsConfig {
+        #[serde(default = "default_allow")]
+        pub allow: Vec<String>,
+        #[serde(default = "default_confirm")]
+        pub confirm: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct NetworkConfig {
+        #[serde(default = "default_network_allow")]
+        pub allow: Vec<String>,
+        #[serde(default = "default_network_deny")]
+        pub deny: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+    pub struct FilesystemConfig {
+        #[serde(default = "default_writable")]
+        pub writable: Vec<String>,
+        #[serde(default)]
+        pub readonly: Vec<String>,
+        #[serde(default = "default_fs_deny")]
+        pub deny: Vec<String>,
+    }
+
+    fn default_allow() -> Vec<String> {
+        vec![
+            "cargo build", "cargo test", "cargo clippy", "cargo fmt",
+            "git status", "git diff", "git log",
+            "ls", "cat", "find", "grep", "rg",
+        ].into_iter().map(String::from).collect()
+    }
+
+    fn default_confirm() -> Vec<String> {
+        vec!["git push", "git commit", "rm -rf", "sudo *"]
+            .into_iter().map(String::from).collect()
+    }
+
+    fn default_network_allow() -> Vec<String> {
+        vec!["api.deepseek.com", "api.openai.com", "api.anthropic.com"]
+            .into_iter().map(String::from).collect()
+    }
+
+    fn default_network_deny() -> Vec<String> {
+        vec!["*".into()]
+    }
+
+    fn default_writable() -> Vec<String> {
+        vec![".".into()]
+    }
+
+    fn default_fs_deny() -> Vec<String> {
+        vec!["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
+            .into_iter().map(String::from).collect()
+    }
+
+    impl Default for AuthorityConfig {
+        fn default() -> Self {
+            Self {
+                commands: CommandsConfig {
+                    allow: default_allow(),
+                    confirm: default_confirm(),
+                },
+                network: NetworkConfig {
+                    allow: default_network_allow(),
+                    deny: default_network_deny(),
+                },
+                filesystem: FilesystemConfig {
+                    writable: default_writable(),
+                    readonly: vec!["/etc".into(), "/usr".into()],
+                    deny: default_fs_deny(),
+                },
+            }
+        }
+    }
+
+    fn authority_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let home = dirs::home_dir().ok_or("cannot find home directory")?;
+        Ok(home.join(".arcana").join("authority.toml"))
+    }
+
+    fn load() -> Result<AuthorityConfig, Box<dyn std::error::Error>> {
+        let path = authority_path()?;
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            Ok(toml::from_str(&content)?)
+        } else {
+            Ok(AuthorityConfig::default())
+        }
+    }
+
+    fn save(config: &AuthorityConfig) -> Result<(), Box<dyn std::error::Error>> {
+        let path = authority_path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, toml::to_string_pretty(config)?)?;
+        Ok(())
+    }
+
+    pub async fn run(args: AuthArgs) -> Result<(), Box<dyn std::error::Error>> {
+        match args.action {
+            Some(AuthAction::Status) | None => {
+                let config = load()?;
+                let path = authority_path()?;
+                println!("  Authority config: {}\n", path.display());
+                println!("  [commands.allow]");
+                for cmd in &config.commands.allow {
+                    println!("    ✓ {}", cmd);
+                }
+                println!("\n  [commands.confirm]");
+                for cmd in &config.commands.confirm {
+                    println!("    ⚠ {}", cmd);
+                }
+                println!("\n  [network.allow]");
+                for host in &config.network.allow {
+                    println!("    ✓ {}", host);
+                }
+                println!("\n  [network.deny]");
+                for host in &config.network.deny {
+                    println!("    ✗ {}", host);
+                }
+                println!("\n  [filesystem.writable]");
+                for p in &config.filesystem.writable {
+                    println!("    ✓ {}", p);
+                }
+                println!("\n  [filesystem.deny]");
+                for p in &config.filesystem.deny {
+                    println!("    ✗ {}", p);
+                }
+                println!();
+            }
+            Some(AuthAction::Allow { pattern }) => {
+                let mut config = load()?;
+                if !config.commands.allow.contains(&pattern) {
+                    config.commands.allow.push(pattern.clone());
+                    save(&config)?;
+                    println!("  ✓ Added to allow list: {}", pattern);
+                } else {
+                    println!("  Already in allow list: {}", pattern);
+                }
+            }
+            Some(AuthAction::Deny { pattern }) => {
+                let mut config = load()?;
+                if !config.commands.confirm.contains(&pattern) {
+                    config.commands.confirm.push(pattern.clone());
+                    save(&config)?;
+                    println!("  ✓ Added to confirm list: {}", pattern);
+                } else {
+                    println!("  Already in confirm list: {}", pattern);
+                }
+            }
+            Some(AuthAction::Revoke { pattern }) => {
+                let mut config = load()?;
+                let before = config.commands.allow.len();
+                config.commands.allow.retain(|c| c != &pattern);
+                if config.commands.allow.len() < before {
+                    save(&config)?;
+                    println!("  ✓ Revoked from allow list: {}", pattern);
+                } else {
+                    println!("  Not found in allow list: {}", pattern);
+                }
+            }
+            Some(AuthAction::Reset) => {
+                let config = AuthorityConfig::default();
+                save(&config)?;
+                println!("  ✓ Authority config reset to defaults.");
+            }
+        }
         Ok(())
     }
 }

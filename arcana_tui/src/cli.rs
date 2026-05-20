@@ -42,7 +42,7 @@ pub enum Command {
     Version,
     /// Session management
     Session(SessionArgs),
-    /// API key management
+    /// Command authorization management
     Auth(AuthArgs),
     /// Configuration management
     Config(ConfigArgs),
@@ -103,15 +103,25 @@ pub struct AuthArgs {
 
 #[derive(Subcommand)]
 pub enum AuthAction {
-    Set {
-        #[arg(long)]
-        provider: String,
-    },
-    Clear {
-        #[arg(long)]
-        provider: String,
-    },
+    /// Show all authorized commands/network/fs rules
     Status,
+    /// Add a command to the allow list
+    Allow {
+        /// Command pattern to allow
+        pattern: String,
+    },
+    /// Add a command to the deny/confirm list
+    Deny {
+        /// Command pattern to deny
+        pattern: String,
+    },
+    /// Remove a command from the allow list
+    Revoke {
+        /// Command pattern to revoke
+        pattern: String,
+    },
+    /// Reset authority config to defaults
+    Reset,
 }
 
 #[derive(Parser)]

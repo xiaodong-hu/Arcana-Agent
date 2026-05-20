@@ -1,23 +1,23 @@
 <p align="center">
   <pre>
-     ╔═══════════════════════════════════════════════════════════╗
-     ║                                                           ║
-     ║              ░█▀█░█▀▄░█▀▀░█▀█░█▀█░█▀█                   ║
-     ║              ░█▀█░█▀▄░█░░░█▀█░█░█░█▀█                   ║
-     ║              ░▀░▀░▀░▀░▀▀▀░▀░▀░▀░▀░▀░▀                   ║
-     ║                                                           ║
-     ║          Memory · Skills · Authority · Agents             ║
-     ║                                                           ║
-     ╚═══════════════════════════════════════════════════════════╝
+     ╔═══════════════════════════════════════════════════════════════════════════════════╗
+     ║                                                                                   ║
+     ║                           ░█▀█░█▀▄░█▀▀░█▀█░█▀█░█▀█                                ║
+     ║                           ░█▀█░█▀▄░█░░░█▀█░█░█░█▀█                                ║
+     ║                           ░▀░▀░▀░▀░▀▀▀░▀░▀░▀░▀░▀░▀                                ║
+     ║                                                                                   ║
+     ║   Authority & Recording · Multistage Memory · Skill Modules · Sub-Agents Support  ║
+     ║                                                                                   ║
+     ╚═══════════════════════════════════════════════════════════════════════════════════╝
   </pre>
 </p>
 
 <p align="center">
-  <strong>A sovereign AI agent that remembers, learns, and operates under your authority.</strong>
+  <strong>A 100% RUST-written sovereign AI agent that remembers, involves, and operates under RUST-managed authority.</strong>
 </p>
 
 <p align="center">
-  <em>Not another chatbot wrapper. A full autonomous agent runtime with memory persistence, skill composition, sub-agent orchestration, and cryptographic authority control — all in your terminal.</em>
+  <em>A full autonomous agent runtime with memory persistence, skill composition, hybrid architectures, sub-agent orchestration, and cryptographic rust-managed authority control — all in your terminal.</em>
 </p>
 
 ---
@@ -28,7 +28,7 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 
 | Problem | Arcana's Answer |
 |---------|-----------------|
-| Agents forget context between sessions | **Persistent memory** — semantic knowledge store survives across sessions |
+| Agents forget context between sessions | **Multistage memory** — semantic knowledge store survives across sessions, with human-like foget mechanism |
 | No control over what agents do | **Authority system** — every file write is recorded, reviewable, recoverable |
 | One model fits all | **Hybrid LLM routing** — different models for different agent roles |
 | Skills are hardcoded | **Composable skill modules** — trigger-based, hot-loadable, user-extensible |
@@ -45,7 +45,7 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        arcana (TUI)                               │  │
 │  │  ┌─────────────────────────────────────────────────────────────┐  │  │
-│  │  │ Status: ⚗ deepseek-v4-pro │ [████░░░░░░] 8.2K/1M          │  │  │
+│  │  │ Status: ⚗ deepseek-v4-pro │ [████░░░░░░] 8.2K/1M | Sub-Agents: 0 | Loaded Skills: 3 | Tasks: 2/7 │  │  │
 │  │  ├─────────────────────────────────────────────────────────────┤  │  │
 │  │  │ Viewport (streaming responses, thinking blocks, diffs)      │  │  │
 │  │  ├─────────────────────────────────────────────────────────────┤  │  │
@@ -126,14 +126,24 @@ reasoning_effort = "max"
 provider = "deepseek"
 model = "deepseek-v4-pro"
 
+[agents.main.thinking]
+enabled = true
+reasoning_effort = "high"
+
+
 [agents.sub]
 provider = "deepseek"
 model = "deepseek-v4-flash"    # Fast & cheap for parallel work
+
+[agents.main.thinking]
+enabled = true
+reasoning_effort = "high"
+
 ```
 
 ### Authority & Recording
 
-Every file mutation is gated and recorded. Full git-like history of agent actions:
+Every file mutation and system command is gated and recorded. Full git-like history of agent actions:
 
 ```
 .arcana/git_record/
@@ -144,6 +154,64 @@ Every file mutation is gated and recorded. Full git-like history of agent action
 ```
 
 Recover any state: `arcana recover . --to-seq 42`
+
+#### Command Authorization
+
+The agent cannot execute system calls or network commands without explicit authorization. Authorized commands are managed via config or CLI:
+
+```toml
+# ~/.arcana/authority.toml — editable before or after onboard
+[commands]
+# Shell commands the agent is allowed to execute without confirmation
+allow = [
+    "cargo build",
+    "cargo test",
+    "cargo clippy",
+    "git status",
+    "git diff",
+    "git log",
+    "ls",
+    "cat",
+    "find",
+    "grep",
+    "rg",
+]
+
+# Commands that always require confirmation (even if pattern-matched above)
+confirm = [
+    "git push",
+    "git commit",
+    "rm -rf",
+    "sudo *",
+]
+
+# Network access rules
+[network]
+allow = [
+    "api.deepseek.com",
+    "api.openai.com",
+    "api.anthropic.com",
+]
+deny = ["*"]  # deny all other outbound by default
+
+# File system scope (relative to project root)
+[filesystem]
+writable = ["."]           # project root
+readonly = ["/etc", "/usr"]
+deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
+```
+
+Manage at runtime:
+
+```bash
+arcana auth status              # Show all authorized commands/network/fs rules
+arcana auth allow "cargo fmt"   # Add a command to the allow list
+arcana auth deny "rm -rf /"     # Add to deny list
+arcana auth revoke "git push"   # Remove from allow list
+arcana auth reset               # Reset to defaults
+```
+
+The authority config is hot-reloadable — edit `~/.arcana/authority.toml` and changes take effect immediately, just like skill modules.
 
 ### Persistent Memory
 
@@ -274,6 +342,40 @@ Arcana-Agent/
 
 ---
 
+## ⚠️ Current Status — Unimplemented Features
+
+> **Warning:** Arcana is in early development. The following features are designed but not yet implemented.
+
+### Working Now
+- [x] `arcana onboard` — interactive & non-interactive setup wizard
+- [x] `arcana -q "..."` — single-shot LLM query (DeepSeek API, with thinking mode)
+- [x] `arcana version` / `arcana check` / `arcana config show|path|edit`
+- [x] `arcana --reset` — factory reset
+- [x] Interactive TUI shell (viewport, composer, status bar, keybindings)
+- [x] Collapsible task panel (Ctrl+T) with tree-style indicators
+- [x] Interactive LLM streaming — TUI session sends messages to DeepSeek with SSE streaming
+- [x] Thinking chain panel — collapsed by default, Ctrl+O to expand/collapse
+- [x] `arcana auth status|allow|deny|revoke|reset` — command authorization management
+- [x] `~/.arcana/authority.toml` — hot-reloadable authority config (created on onboard)
+
+### Not Yet Implemented
+- [ ] **Session management** — `arcana session list|resume|rename|delete|export|import`
+- [ ] **Session resume** — `arcana resume --last` / `arcana resume <id>`
+- [ ] **Sub-agent orchestration** — spawning, checkpointing, freezing, resuming sub-agents
+- [ ] **Skills daemon** — trigger-based skill loading, hot-reload, manifest parsing
+- [ ] **Memory system** — knowledge DB, semantic search, error patterns, session recall
+- [ ] **Embedding model download** — `arcana onboard` does not yet download `all-MiniLM-L6-v2.onnx`
+- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery
+- [ ] **`arcana recover`** — restore project state from `git_record`
+- [ ] **Query agent overlay** — `?` overlay sends queries to a persistent sub-agent
+- [ ] **Tool calls** — shell execution, file read/write, search, web fetch
+- [ ] **Diff review panel** — interactive accept/reject of file mutations
+- [ ] **OpenAI / Anthropic provider support** — only DeepSeek is wired up
+- [ ] **Context caching** — leveraging DeepSeek's prefix caching for long contexts
+- [ ] **Desktop notifications** — bell/notification on response complete
+
+---
+
 ## License
 
-MIT
+Apache-2.0
