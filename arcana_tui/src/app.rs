@@ -406,13 +406,13 @@ Hotkeys:\n\
                                         let editor = config.editor.command.clone();
                                         // Stop event reader completely before editor
                                         event_handle.abort();
-                                        tui.restore()?;
+                                        tui.suspend()?;
                                         // Run editor with full terminal control
                                         let _ = std::process::Command::new(&editor)
                                             .arg(&path)
                                             .status();
-                                        // Respawn TUI and event reader
-                                        tui = crate::tui::Tui::new()?;
+                                        // Resume TUI and respawn event reader
+                                        tui.resume()?;
                                         let (tx, rx, handle) = event::spawn_event_reader();
                                         event_tx = tx;
                                         events = rx;
@@ -472,13 +472,13 @@ Hotkeys:\n\
                                 let line = before.matches('\n').count() + 1;
                                 let col = before.rfind('\n').map(|i| app.composer.cursor_pos - i - 1).unwrap_or(app.composer.cursor_pos) + 1;
                                 event_handle.abort();
-                                tui.restore()?;
+                                tui.suspend()?;
                                 let _ = std::process::Command::new(&editor)
                                     .arg(format!("+{}", line))
                                     .arg(&tmp)
                                     .env("ARCANA_COL", col.to_string())
                                     .status();
-                                tui = crate::tui::Tui::new()?;
+                                tui.resume()?;
                                 let (tx, rx, handle) = event::spawn_event_reader();
                                 event_tx = tx;
                                 events = rx;
