@@ -150,6 +150,8 @@ impl Viewport {
             });
         }
         self.is_streaming = false;
+        self.auto_scroll = true;
+        self.scroll_offset = 0;
     }
 
     /// Toggle all thinking blocks expand/collapse (Ctrl+O).

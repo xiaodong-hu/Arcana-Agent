@@ -7,6 +7,8 @@ use tokio::sync::mpsc;
 pub enum AppEvent {
     /// Terminal key event
     Key(KeyEvent),
+    /// Pasted text (bracketed paste)
+    Paste(String),
     /// Terminal resize
     Resize(u16, u16),
     /// A token arrived from the LLM stream
@@ -45,6 +47,11 @@ pub fn spawn_event_reader() -> (mpsc::UnboundedSender<AppEvent>, mpsc::Unbounded
                 match event::read() {
                     Ok(CrosstermEvent::Key(key)) => {
                         if tx2.send(AppEvent::Key(key)).is_err() {
+                            break;
+                        }
+                    }
+                    Ok(CrosstermEvent::Paste(text)) => {
+                        if tx2.send(AppEvent::Paste(text)).is_err() {
                             break;
                         }
                     }

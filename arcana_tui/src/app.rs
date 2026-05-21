@@ -466,6 +466,22 @@ pub async fn interactive(
                         ViewMode::DiffReview => {}
                     }
                 }
+                AppEvent::Paste(text) => {
+                    // Insert pasted text directly into the active composer
+                    let composer = if app.mode == ViewMode::QueryOverlay {
+                        &mut app.overlay.composer
+                    } else {
+                        &mut app.composer
+                    };
+                    for ch in text.chars() {
+                        if ch == '\n' {
+                            composer.insert_newline();
+                        } else if ch != '\r' {
+                            composer.insert_char(ch);
+                        }
+                    }
+                    app.show_banner = false;
+                }
                 AppEvent::Resize(_, _) => {}
                 AppEvent::Token(token) => {
                     // Thinking tokens are prefixed with \x00THINK:

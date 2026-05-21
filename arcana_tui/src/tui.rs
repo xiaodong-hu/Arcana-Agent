@@ -1,6 +1,9 @@
 use crossterm::{
     execute,
-    event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags},
+    event::{
+        EnableBracketedPaste, DisableBracketedPaste,
+        KeyboardEnhancementFlags, PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    },
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::prelude::*;
@@ -16,7 +19,7 @@ impl Tui {
     /// Initialize the terminal (enter raw mode, alternate screen).
     pub fn new() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
-        execute!(stdout(), EnterAlternateScreen)?;
+        execute!(stdout(), EnterAlternateScreen, EnableBracketedPaste)?;
 
         // Try to enable kitty keyboard protocol for proper Ctrl+Enter
         let keyboard_enhanced = execute!(
@@ -46,7 +49,7 @@ impl Tui {
             let _ = execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags);
         }
         terminal::disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), LeaveAlternateScreen)?;
+        execute!(self.terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
         Ok(())
     }
 }
