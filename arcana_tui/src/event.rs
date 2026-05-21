@@ -1,4 +1,4 @@
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -9,6 +9,9 @@ pub enum AppEvent {
     Key(KeyEvent),
     /// Pasted text (bracketed paste)
     Paste(String),
+    /// Mouse scroll
+    ScrollUp(u16),
+    ScrollDown(u16),
     /// Terminal resize
     Resize(u16, u16),
     /// A token arrived from the LLM stream
@@ -60,7 +63,18 @@ pub fn spawn_event_reader() -> (mpsc::UnboundedSender<AppEvent>, mpsc::Unbounded
                             break;
                         }
                     }
-                    Ok(_) => {} // Mouse events, etc.
+                    Ok(CrosstermEvent::Mouse(MouseEvent { kind, .. })) => {
+                        match kind {
+                            MouseEventKind::ScrollUp => {
+                                let _ = tx2.send(AppEvent::ScrollUp(3));
+                            }
+                            MouseEventKind::ScrollDown => {
+                                let _ = tx2.send(AppEvent::ScrollDown(3));
+                            }
+                            _ => {}
+                        }
+                    }
+                    Ok(_) => {}
                     Err(_) => break,
                 }
             } else {

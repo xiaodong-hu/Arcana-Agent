@@ -467,7 +467,6 @@ pub async fn interactive(
                     }
                 }
                 AppEvent::Paste(text) => {
-                    // Insert pasted text directly into the active composer
                     let composer = if app.mode == ViewMode::QueryOverlay {
                         &mut app.overlay.composer
                     } else {
@@ -482,6 +481,8 @@ pub async fn interactive(
                     }
                     app.show_banner = false;
                 }
+                AppEvent::ScrollUp(n) => { app.viewport.scroll_up(n as usize); }
+                AppEvent::ScrollDown(n) => { app.viewport.scroll_down(n as usize); }
                 AppEvent::Resize(_, _) => {}
                 AppEvent::Token(token) => {
                     // Thinking tokens are prefixed with \x00THINK:
