@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
@@ -256,20 +256,17 @@ impl Composer {
     }
 
     /// Calculate the height needed for the composer, accounting for word wrap.
-    /// `width` is the available content width (terminal width minus prompt and borders).
     pub fn height_for_width(&self, width: u16) -> u16 {
         let prompt_w = 2u16; // "❯ " or "\ "
-        let content_w = width.saturating_sub(prompt_w).max(1) as usize;
+        let avail_w = width.saturating_sub(prompt_w).max(1) as usize;
+        let display = if !self.overlay_mode && self.input.starts_with('\\') { &self.input[1..] } else { &self.input };
+        let logical_lines: Vec<&str> = if display.is_empty() { vec![""] } else { display.split('\n').collect() };
         let mut visual_lines: u16 = 0;
-        let display = if self.input.starts_with('\\') { &self.input[1..] } else { &self.input };
-        let text_lines: Vec<&str> = if display.is_empty() { vec![""] } else { display.split('\n').collect() };
-        for line in &text_lines {
-            let line_w = UnicodeWidthStr::width(*line);
-            visual_lines += ((line_w / content_w) + 1) as u16;
+        for line in &logical_lines {
+            let w = UnicodeWidthStr::width(*line);
+            visual_lines += ((w / avail_w) + 1) as u16;
         }
-        let hint_lines = if self.input == "\\" {
-            if self.overlay_mode { 1 } else { 11 }
-        } else { 0 };
+        let hint_lines: u16 = if !self.overlay_mode && self.input == "\\" { 11 } else { 0 };
         visual_lines.min(10) + 1 + hint_lines // +1 for top border
     }
 
@@ -299,7 +296,6 @@ impl Composer {
         let prompt_width = UnicodeWidthStr::width(prompt) as u16;
 
         if self.input.is_empty() && self.show_hint {
-            // Show hint
             let line = Line::from(vec![
                 Span::styled(prompt, theme.prompt_glyph),
                 Span::styled("[type \\ for commands, or enter message]", theme.dim),
@@ -309,7 +305,6 @@ impl Composer {
             return;
         }
 
-        // Build lines for multiline display
         let display_text = if in_slash_mode { &self.input[1..] } else { &self.input };
         let content_style = if in_slash_mode {
             Style::default().fg(Color::Cyan)
@@ -322,79 +317,117 @@ impl Composer {
             theme.prompt_glyph
         };
 
-        let text_lines: Vec<&str> = if display_text.is_empty() {
-            vec![""]
+        let avail_w = inner.width.saturating_sub(prompt_width) as usize;
+        let avail_w = avail_w.max(1);
+
+        // Split into logical lines, then wrap each into visual lines
+        let logical_lines: Vec<&str> = if display_text.is_empty() { vec![""] } else { display_text.split('\n').collect() };
+
+        let mut visual_lines: Vec<Line> = Vec::new();
+        let mut cursor_visual_y: u16 = 0;
+        let mut cursor_visual_x: u16 = 0;
+        let mut cursor_found = false;
+
+        // Calculate cursor position in display_text
+        let cursor_in_display = if in_slash_mode {
+            self.cursor_pos.saturating_sub(1)
         } else {
-            display_text.split('\n').collect()
+            self.cursor_pos
         };
 
-        let mut lines: Vec<Line> = Vec::new();
-        for (i, line_text) in text_lines.iter().enumerate() {
-            let mut spans = Vec::new();
-            if i == 0 {
-                spans.push(Span::styled(prompt, prompt_style));
-            } else {
-                spans.push(Span::styled("  ", Style::default())); // continuation indent
-            }
-            spans.push(Span::styled(line_text.to_string(), content_style));
+        let mut char_offset: usize = 0; // byte offset into display_text
 
-            // Slash command hints (inline for partial match)
-            if i == 0 && in_slash_mode && self.input.len() > 1 && self.input.len() <= 7 {
-                let hint = slash_hint(&self.input);
-                if !hint.is_empty() {
-                    spans.push(Span::styled(
-                        hint.to_string(),
-                        Style::default().fg(Color::Rgb(255, 165, 80)), // shallow orange
-                    ));
+        for (line_idx, logical_line) in logical_lines.iter().enumerate() {
+            let line_prefix = if line_idx == 0 { prompt } else { "  " };
+            let line_prefix_style = if line_idx == 0 { prompt_style } else { Style::default() };
+
+            // Wrap this logical line into chunks of avail_w characters
+            let mut remaining = *logical_line;
+            let mut first_chunk = true;
+            loop {
+                let chunk_w = UnicodeWidthStr::width(remaining);
+                let (chunk, rest) = if chunk_w <= avail_w {
+                    (remaining, "")
+                } else {
+                    // Find the byte position where width exceeds avail_w
+                    let mut byte_pos = 0;
+                    let mut w = 0;
+                    for (i, ch) in remaining.char_indices() {
+                        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                        if w + cw > avail_w { byte_pos = i; break; }
+                        w += cw;
+                        byte_pos = i + ch.len_utf8();
+                    }
+                    (&remaining[..byte_pos], &remaining[byte_pos..])
+                };
+
+                let mut spans = Vec::new();
+                if first_chunk {
+                    spans.push(Span::styled(line_prefix, line_prefix_style));
+                    first_chunk = false;
+                } else {
+                    spans.push(Span::styled("  ", Style::default())); // wrap continuation
                 }
+                spans.push(Span::styled(chunk.to_string(), content_style));
+
+                // Check if cursor is in this chunk
+                if !cursor_found {
+                    let chunk_start = char_offset;
+                    let chunk_end = char_offset + chunk.len();
+                    if cursor_in_display >= chunk_start && cursor_in_display <= chunk_end {
+                        let cursor_text = &display_text[chunk_start..cursor_in_display];
+                        cursor_visual_x = prompt_width + UnicodeWidthStr::width(cursor_text) as u16;
+                        if !first_chunk && line_idx > 0 {
+                            // continuation line uses "  " prefix
+                        }
+                        cursor_visual_y = visual_lines.len() as u16;
+                        cursor_found = true;
+                    }
+                }
+
+                // Inline hint on first visual line
+                if visual_lines.is_empty() && in_slash_mode && self.input.len() > 1 && self.input.len() <= 7 {
+                    let hint = slash_hint(&self.input);
+                    if !hint.is_empty() {
+                        spans.push(Span::styled(hint.to_string(), Style::default().fg(Color::Rgb(255, 165, 80))));
+                    }
+                }
+
+                visual_lines.push(Line::from(spans));
+                char_offset += chunk.len();
+
+                if rest.is_empty() { break; }
+                remaining = rest;
             }
-            lines.push(Line::from(spans));
+
+            // Account for the '\n' between logical lines
+            if line_idx < logical_lines.len() - 1 {
+                char_offset += 1; // the '\n' byte
+            }
         }
 
-        // Vertical command list when input is just "\"
+        // Vertical command list
         if in_slash_mode && self.input == "\\" {
             let hint_style = Style::default().fg(Color::Rgb(255, 165, 80));
-            if self.overlay_mode {
-                lines.push(Line::from(vec![
+            let commands = [
+                "\\quit", "\\help", "\\clear", "\\status",
+                "\\usage", "\\auth list", "\\auth add <cmd>",
+                "\\auth remove <cmd>", "\\auth edit", "\\check", "\\mode",
+            ];
+            for cmd in commands {
+                visual_lines.push(Line::from(vec![
                     Span::styled("  ", Style::default()),
-                    Span::styled("\\hide", hint_style),
+                    Span::styled(cmd, hint_style),
                 ]));
-            } else {
-                let commands = [
-                    "\\quit", "\\help", "\\clear", "\\status",
-                    "\\usage", "\\auth list", "\\auth add <cmd>",
-                    "\\auth remove <cmd>", "\\auth edit", "\\check", "\\mode",
-                ];
-                for cmd in commands {
-                    lines.push(Line::from(vec![
-                        Span::styled("  ", Style::default()),
-                        Span::styled(cmd, hint_style),
-                    ]));
-                }
             }
         }
 
-        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+        let paragraph = Paragraph::new(visual_lines);
         frame.render_widget(paragraph, inner);
 
-        // Calculate cursor position accounting for word wrap
-        let (cursor_line, cursor_col) = self.cursor_line_col();
-        let adjusted_col = if in_slash_mode && cursor_line == 0 {
-            cursor_col.saturating_sub(1)
-        } else {
-            cursor_col
-        };
-
-        // Account for wrapping: if cursor_col + prompt exceeds width, wrap to next visual line
-        let content_width = inner.width.saturating_sub(prompt_width) as u16;
-        let wrap_line_offset = if content_width > 0 { adjusted_col / content_width } else { 0 };
-        let wrap_col = adjusted_col % content_width.max(1);
-
-        let cursor_x = inner.x + prompt_width + wrap_col;
-        let cursor_y = inner.y + cursor_line as u16 + wrap_line_offset;
         frame.set_cursor_position(Position::new(
-            cursor_x.min(inner.x + inner.width - 1),
-            cursor_y.min(inner.y + inner.height - 1),
+            (inner.x + cursor_visual_x).min(inner.x + inner.width - 1),
+            (inner.y + cursor_visual_y).min(inner.y + inner.height - 1),
         ));
     }
 }
