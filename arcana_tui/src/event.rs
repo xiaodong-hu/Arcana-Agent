@@ -1,4 +1,5 @@
-use crossterm::event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{Event as CrosstermEvent, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -37,50 +38,47 @@ pub enum AppEvent {
     OverlayError(String),
 }
 
-/// Spawn the terminal event reader task.
-/// Returns (sender, receiver, task_handle) so the reader can be aborted for $EDITOR.
+/// Spawn the terminal event reader task using async EventStream.
+/// The task is properly cancellable via abort() — no blocking poll.
 pub fn spawn_event_reader() -> (mpsc::UnboundedSender<AppEvent>, mpsc::UnboundedReceiver<AppEvent>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let tx2 = tx.clone();
 
     let handle = tokio::spawn(async move {
+        let mut reader = EventStream::new();
+        let mut tick_interval = tokio::time::interval(Duration::from_millis(250));
+
         loop {
-            // Poll for crossterm events with a 250ms timeout (for tick generation)
-            if event::poll(Duration::from_millis(250)).unwrap_or(false) {
-                match event::read() {
-                    Ok(CrosstermEvent::Key(key)) => {
-                        if tx2.send(AppEvent::Key(key)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(CrosstermEvent::Paste(text)) => {
-                        if tx2.send(AppEvent::Paste(text)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(CrosstermEvent::Resize(w, h)) => {
-                        if tx2.send(AppEvent::Resize(w, h)).is_err() {
-                            break;
-                        }
-                    }
-                    Ok(CrosstermEvent::Mouse(MouseEvent { kind, .. })) => {
-                        match kind {
-                            MouseEventKind::ScrollUp => {
-                                let _ = tx2.send(AppEvent::ScrollUp(1));
-                            }
-                            MouseEventKind::ScrollDown => {
-                                let _ = tx2.send(AppEvent::ScrollDown(1));
-                            }
-                            _ => {}
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(_) => break,
+            tokio::select! {
+                _ = tick_interval.tick() => {
+                    if tx2.send(AppEvent::Tick).is_err() { break; }
                 }
-            } else {
-                // Timeout — send tick for time-based updates
-                if tx2.send(AppEvent::Tick).is_err() {
-                    break;
+                event = reader.next() => {
+                    match event {
+                        Some(Ok(CrosstermEvent::Key(key))) => {
+                            if tx2.send(AppEvent::Key(key)).is_err() { break; }
+                        }
+                        Some(Ok(CrosstermEvent::Paste(text))) => {
+                            if tx2.send(AppEvent::Paste(text)).is_err() { break; }
+                        }
+                        Some(Ok(CrosstermEvent::Resize(w, h))) => {
+                            if tx2.send(AppEvent::Resize(w, h)).is_err() { break; }
+                        }
+                        Some(Ok(CrosstermEvent::Mouse(MouseEvent { kind, .. }))) => {
+                            match kind {
+                                MouseEventKind::ScrollUp => {
+                                    let _ = tx2.send(AppEvent::ScrollUp(1));
+                                }
+                                MouseEventKind::ScrollDown => {
+                                    let _ = tx2.send(AppEvent::ScrollDown(1));
+                                }
+                                _ => {}
+                            }
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(_)) => break,
+                        None => break,
+                    }
                 }
             }
         }
