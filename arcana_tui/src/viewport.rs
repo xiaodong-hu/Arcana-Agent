@@ -150,8 +150,8 @@ impl Viewport {
             });
         }
         self.is_streaming = false;
-        self.auto_scroll = true;
-        self.scroll_offset = 0;
+        // Don't force auto_scroll — user may be reading above
+        // auto_scroll re-engages when user scrolls back to bottom
     }
 
     /// Toggle all thinking blocks expand/collapse (Ctrl+O).
@@ -164,6 +164,8 @@ impl Viewport {
                 t.collapsed = any_expanded;
             }
         }
+        // Reset scroll since content size changed dramatically
+        self.scroll_offset = 0;
     }
 
     /// Toggle thinking for a specific dialogue (by user message index).

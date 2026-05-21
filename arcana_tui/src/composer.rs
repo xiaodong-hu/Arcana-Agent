@@ -427,12 +427,32 @@ impl Composer {
             }
         }
 
-        let paragraph = Paragraph::new(visual_lines);
+        // Scroll visual_lines to keep cursor visible within inner.height
+        let max_visible = inner.height as usize;
+        let scroll_offset = if visual_lines.len() <= max_visible {
+            0
+        } else {
+            // Ensure cursor_visual_y is within the visible window
+            let cursor_y = cursor_visual_y as usize;
+            if cursor_y >= max_visible {
+                cursor_y - max_visible + 1
+            } else {
+                0
+            }
+        };
+
+        let displayed: Vec<Line> = visual_lines.into_iter()
+            .skip(scroll_offset)
+            .take(max_visible)
+            .collect();
+
+        let paragraph = Paragraph::new(displayed);
         frame.render_widget(paragraph, inner);
 
+        let adjusted_cursor_y = cursor_visual_y.saturating_sub(scroll_offset as u16);
         frame.set_cursor_position(Position::new(
             (inner.x + cursor_visual_x).min(inner.x + inner.width - 1),
-            (inner.y + cursor_visual_y).min(inner.y + inner.height - 1),
+            (inner.y + adjusted_cursor_y).min(inner.y + inner.height - 1),
         ));
     }
 }
