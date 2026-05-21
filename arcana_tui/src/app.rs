@@ -455,25 +455,19 @@ pub async fn interactive(
                             // Handle Enter for overlay LLM dispatch
                             if action == KeyAction::Enter && !app.overlay.composer.is_empty() {
                                 let input = app.overlay.composer.take_input();
-                                // Handle \hide command
-                                if input.trim() == "\\hide" {
-                                    app.overlay.hide();
-                                    app.mode = ViewMode::Main;
-                                } else {
-                                    app.overlay.messages.push(Message {
-                                        role: MessageRole::User,
-                                        content: input.clone(),
-                                        timestamp: chrono::Utc::now(),
-                                        thinking: None,
-                                        tool_calls: Vec::new(),
-                                    });
-                                    app.overlay.is_streaming = true;
+                                app.overlay.messages.push(Message {
+                                    role: MessageRole::User,
+                                    content: input.clone(),
+                                    timestamp: chrono::Utc::now(),
+                                    thinking: None,
+                                    tool_calls: Vec::new(),
+                                });
+                                app.overlay.is_streaming = true;
 
-                                    let msgs = app.overlay.build_messages();
-                                    crate::llm::spawn_overlay_stream(
-                                        &config, msgs, event_tx.clone()
-                                    );
-                                }
+                                let msgs = app.overlay.build_messages();
+                                crate::llm::spawn_overlay_stream(
+                                    &config, msgs, event_tx.clone()
+                                );
                             } else {
                                 app.handle_overlay_key(action);
                             }

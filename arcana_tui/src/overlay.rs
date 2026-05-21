@@ -43,7 +43,7 @@ impl Default for QueryOverlay {
             messages: Vec::new(),
             composer: {
                 let mut c = Composer::new();
-                c.overlay_mode = true;
+                c.overlay_mode = true; // disables command hints
                 c
             },
             scroll_offset: 0,
@@ -160,7 +160,7 @@ impl QueryOverlay {
         frame.render_widget(Clear, overlay_area);
 
         let block = Block::default()
-            .title(" Query Agent (Ctrl+/ toggle, \\hide to close) ")
+            .title(" Query Agent (Ctrl+/ or Esc to close) ")
             .title_alignment(Alignment::Left)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.overlay_border));
@@ -246,7 +246,7 @@ impl QueryOverlay {
         frame.render_widget(Paragraph::new(visible_lines).wrap(Wrap { trim: false }), conv_area);
 
         // Separator
-        let hint = " Ctrl+/ close │ \\hide │ ctrl+o thinking ";
+        let hint = " Ctrl+/ or Esc to close │ ctrl+o thinking ";
         let sep_line = Line::from(vec![
             Span::styled(
                 "─".repeat((inner.width as usize).saturating_sub(hint.len())),

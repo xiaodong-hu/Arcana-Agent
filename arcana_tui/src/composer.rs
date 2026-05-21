@@ -294,7 +294,7 @@ impl Composer {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let in_slash_mode = self.input.starts_with('\\');
+        let in_slash_mode = !self.overlay_mode && self.input.starts_with('\\');
         let prompt = if in_slash_mode { "\\ " } else { "❯ " };
         let prompt_width = UnicodeWidthStr::width(prompt) as u16;
 
