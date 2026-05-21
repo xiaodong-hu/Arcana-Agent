@@ -176,7 +176,34 @@ Memory persists across sessions with multiple layers:
 
 ---
 
-### 4. Orchestrated Sub-Agents
+### 4. Human-in-the-Loop Interaction
+
+The agent never acts alone on destructive operations. Every mutation goes through a human review cycle:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Editor ↔ Prompt Panel                                   │
+│  • Ctrl+e opens $EDITOR with current prompt              │
+│  • Full vim/neovim editing power (motions, LSP, plugins) │
+│  • :wq flushes content back to prompt panel              │
+│  • Seamless two-way: prompt → editor → prompt → send     │
+│                                                          │
+│  Diff Review (on file mutations):                        │
+│  • Full unified diff with syntax coloring                │
+│  • Accept / Edit in $EDITOR / Reject                     │
+│  • Human can modify LLM's proposed changes before apply  │
+│                                                          │
+│  Authority Approval (on restricted operations):          │
+│  • Single permission — approve this one mutation         │
+│  • Trust session — approve all (dangerous)               │
+│  • Human interrupt — pause, edit, then resume            │
+│  • Reject and abort — agent must find alternative        │
+└─────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 5. Orchestrated Sub-Agents
 
 Checkpointed, freezable, resumable sub-agents to save tokens:
 
@@ -202,7 +229,7 @@ Checkpointed, freezable, resumable sub-agents to save tokens:
 
 ---
 
-### 5. Hybrid LLM Configuration
+### 6. Hybrid LLM Configuration
 
 Assign different models to different roles:
 
@@ -226,7 +253,7 @@ model = "deepseek-v4-flash"    # Fast & cheap for parallel work
 
 ---
 
-### 6. Per-Response Telemetry
+### 7. Per-Response Telemetry
 
 Every LLM response shows exactly what it cost:
 
