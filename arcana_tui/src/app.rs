@@ -270,7 +270,7 @@ pub async fn interactive(
 
     let mut tui = Tui::new()?;
     let mut app = App::new(&config);
-    let (event_tx, mut events) = event::spawn_event_reader();
+    let (mut event_tx, mut events, mut event_handle) = event::spawn_event_reader();
 
     // Conversation history for LLM context
     let mut conversation: Vec<serde_json::Value> = vec![
@@ -290,28 +290,28 @@ pub async fn interactive(
                             if action == KeyAction::Enter && !app.composer.is_empty() {
                                 let input = app.composer.take_input();
                                 // Handle slash commands
-                                let is_command = input.starts_with('/');
+                                let is_command = input.starts_with('\\');
                                 match input.trim() {
-                                    "/quit" | "/q" => { app.should_quit = true; }
-                                    "/clear" => {
+                                    "\\quit" | "\\q" => { app.should_quit = true; }
+                                    "\\clear" => {
                                         app.viewport.messages.clear();
                                         conversation.truncate(1); // keep system msg
                                     }
-                                    "/help" => {
+                                    "\\help" => {
                                         app.viewport.add_error_message(
-                                            "/quit · /clear · /status · /usage · /check\n\
-                                             /auth list|add|remove|edit\n\
-                                             Ctrl+/ query · Ctrl+T tasks · Ctrl+O thinking · Ctrl+D exit".into()
+                                            "\\quit · \\clear · \\status · \\usage · \\check\n\
+                                             \\auth list|add|remove|edit\n\
+                                             Ctrl+/ query · Ctrl+t tasks · Ctrl+o thinking · Ctrl+d exit".into()
                                         );
                                     }
-                                    "/status" => {
+                                    "\\status" => {
                                         app.viewport.add_error_message(format!(
                                             "Model: {} │ Tokens: {}/{} │ Tasks: {}",
                                             app.status.model_name, app.status.tokens_used,
                                             app.status.tokens_max, app.tasks.len()
                                         ));
                                     }
-                                    "/usage" => {
+                                    "\\usage" => {
                                         let in_str = format_token_count(app.status.session_input_tokens);
                                         let out_str = format_token_count(app.status.session_output_tokens);
                                         app.viewport.add_error_message(format!(
@@ -319,7 +319,7 @@ pub async fn interactive(
                                             app.status.session_requests, in_str, out_str, app.status.session_cost
                                         ));
                                     }
-                                    "/auth" | "/auth list" => {
+                                    "\\auth" | "\\auth list" => {
                                         let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
                                         if path.exists() {
                                             if let Ok(content) = std::fs::read_to_string(&path) {
@@ -333,8 +333,8 @@ pub async fn interactive(
                                             );
                                         }
                                     }
-                                    cmd if cmd.starts_with("/auth add ") => {
-                                        let pattern = cmd.strip_prefix("/auth add ").unwrap().trim();
+                                    cmd if cmd.starts_with("\\auth add ") => {
+                                        let pattern = cmd.strip_prefix("\\auth add ").unwrap().trim();
                                         let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
                                         if let Ok(content) = std::fs::read_to_string(&path) {
                                             // Simple append to [commands] allow list
@@ -346,8 +346,8 @@ pub async fn interactive(
                                             app.viewport.add_error_message(format!("✓ Added to allow: {}", pattern));
                                         }
                                     }
-                                    cmd if cmd.starts_with("/auth remove ") => {
-                                        let pattern = cmd.strip_prefix("/auth remove ").unwrap().trim();
+                                    cmd if cmd.starts_with("\\auth remove ") => {
+                                        let pattern = cmd.strip_prefix("\\auth remove ").unwrap().trim();
                                         let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
                                         if let Ok(content) = std::fs::read_to_string(&path) {
                                             let needle = format!("    \"{}\",\n", pattern);
@@ -356,20 +356,28 @@ pub async fn interactive(
                                             app.viewport.add_error_message(format!("✓ Removed: {}", pattern));
                                         }
                                     }
-                                    "/auth edit" => {
+                                    "\\auth edit" => {
                                         let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
                                         let editor = config.editor.command.clone();
-                                        // Temporarily restore terminal for editor
-                                        let _ = tui.restore();
+                                        // Stop event reader to prevent keyboard leak
+                                        event_handle.abort();
+                                        tui.restore()?;
+                                        // Run editor with full terminal control
                                         let _ = std::process::Command::new(&editor)
                                             .arg(&path)
                                             .status();
+                                        // Respawn TUI and event reader
                                         tui = crate::tui::Tui::new()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+                                        app.composer.clear();
                                         app.viewport.add_error_message(
                                             format!("Authority config reloaded from {}", path.display())
                                         );
                                     }
-                                    "/check" => {
+                                    "\\check" => {
                                         let home = dirs::home_dir().unwrap_or_default().join(".arcana");
                                         let mut lines = Vec::new();
                                         let cfg = home.join("config.toml");
@@ -384,7 +392,7 @@ pub async fn interactive(
                                             format!("Health Check:\n  {}", lines.join("\n  "))
                                         );
                                     }
-                                    _ if input.starts_with('/') => {
+                                    _ if input.starts_with('\\') => {
                                         app.viewport.add_error_message(
                                             format!("Unknown command: {}", input.trim())
                                         );
@@ -405,7 +413,7 @@ pub async fn interactive(
                                     }
                                 }
                                 // Add separator after command output
-                                if is_command && input.trim() != "/quit" && input.trim() != "/q" && input.trim() != "/clear" {
+                                if is_command && input.trim() != "\\quit" && input.trim() != "\\q" && input.trim() != "\\clear" {
                                     app.viewport.add_separator();
                                 }
                                 app.show_banner = false;

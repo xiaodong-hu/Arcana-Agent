@@ -33,12 +33,12 @@ pub enum AppEvent {
 }
 
 /// Spawn the terminal event reader task.
-/// Returns (sender, receiver) so other subsystems can also send AppEvents.
-pub fn spawn_event_reader() -> (mpsc::UnboundedSender<AppEvent>, mpsc::UnboundedReceiver<AppEvent>) {
+/// Returns (sender, receiver, task_handle) so the reader can be aborted for $EDITOR.
+pub fn spawn_event_reader() -> (mpsc::UnboundedSender<AppEvent>, mpsc::UnboundedReceiver<AppEvent>, tokio::task::JoinHandle<()>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let tx2 = tx.clone();
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         loop {
             // Poll for crossterm events with a 250ms timeout (for tick generation)
             if event::poll(Duration::from_millis(250)).unwrap_or(false) {
@@ -65,7 +65,7 @@ pub fn spawn_event_reader() -> (mpsc::UnboundedSender<AppEvent>, mpsc::Unbounded
         }
     });
 
-    (tx, rx)
+    (tx, rx, handle)
 }
 
 /// Classify a key event into a high-level action.

@@ -13,11 +13,11 @@
 </p>
 
 <p align="center">
-  <strong>A 100% RUST-written sovereign AI agent that remembers, involves, and operates under RUST-managed authority.</strong>
+  <strong>A 100% RUST-written AI agent that memorize, involves, collaborates, and operates under strict RUST-managed authority and recording system.</strong>
 </p>
 
 <p align="center">
-  <em>A full autonomous agent runtime with memory persistence, skill composition, hybrid architectures, sub-agent orchestration, and cryptographic rust-managed authority control — all in your terminal.</em>
+  <em>A full autonomous agent runtime with memory persistence, skill composition, hybrid LLM combinations, sub-agent orchestration, and cryptographic rust-managed authority/recording control — all in your terminal.</em>
 </p>
 
 ---
@@ -29,9 +29,9 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 | Problem | Arcana's Answer |
 |---------|-----------------|
 | Agents forget context between sessions | **Multistage memory** — semantic knowledge store survives across sessions, with human-like foget mechanism |
-| No control over what agents do | **Authority system** — every file write is recorded, reviewable, recoverable |
+| No control over what agents can access | **Authority system** — every file write is recorded, reviewable, recoverable |
 | One model fits all | **Hybrid LLM routing** — different models for different agent roles |
-| Skills are hardcoded | **Composable skill modules** — trigger-based, hot-loadable, user-extensible |
+| Skills are hardcoded | **Composable skill modules** — multilevel, trigger-based, hot-loadable, user-extensible |
 | Sub-agents are fire-and-forget | **Orchestrated sub-agents** — checkpointed, freezable, resumable |
 
 ---
@@ -277,13 +277,14 @@ arcana resume --last            # Resume previous session
 | Key | Action |
 |-----|--------|
 | `Ctrl+/` | Toggle query agent overlay |
-| `Ctrl+T` | Toggle tasks panel |
-| `Ctrl+O` | Toggle thinking chain expand/collapse |
-| `Ctrl+Enter` | Newline in composer |
-| `Tab` | Autocomplete slash command / insert spaces |
-| `Ctrl+C` | Interrupt / clear |
-| `Ctrl+D` | End session |
-| `Ctrl+Shift+P` | Freeze all agents |
+| `Ctrl+t` | Toggle tasks panel |
+| `Ctrl+o` | Toggle thinking chain expand/collapse |
+| `Ctrl+Enter` | Newline in composer (also `Ctrl+j`, `Shift+Enter`) |
+| `Tab` | Autocomplete command / insert spaces |
+| `Ctrl+c` | Interrupt / clear composer |
+| `Ctrl+d` | End session |
+| `Ctrl+g` | Open `$EDITOR` |
+| `Ctrl+Shift+p` | Freeze all agents |
 
 ---
 

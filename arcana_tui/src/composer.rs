@@ -52,7 +52,7 @@ impl Composer {
 
     /// Try to autocomplete a slash command; if not applicable, insert tab.
     pub fn autocomplete_or_tab(&mut self) {
-        if self.input.starts_with('/') && !self.input.contains('\n') {
+        if self.input.starts_with('\\') && !self.input.contains('\n') {
             if let Some(completed) = autocomplete_slash(&self.input) {
                 self.input = completed;
                 self.cursor_pos = self.input.len();
@@ -182,7 +182,7 @@ impl Composer {
     /// Calculate the height needed for the composer.
     pub fn height(&self) -> u16 {
         let lines = self.line_count().min(10) as u16;
-        let hint_lines = if self.input == "/" { 11 } else { 0 }; // vertical command list
+        let hint_lines = if self.input == "\\" { 11 } else { 0 }; // vertical command list
         lines + 1 + hint_lines // +1 for top border
     }
 
@@ -202,15 +202,15 @@ impl Composer {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        let in_slash_mode = self.input.starts_with('/');
-        let prompt = if in_slash_mode { "/ " } else { "❯ " };
+        let in_slash_mode = self.input.starts_with('\\');
+        let prompt = if in_slash_mode { "\\ " } else { "❯ " };
         let prompt_width = UnicodeWidthStr::width(prompt) as u16;
 
         if self.input.is_empty() && self.show_hint {
             // Show hint
             let line = Line::from(vec![
                 Span::styled(prompt, theme.prompt_glyph),
-                Span::styled("[type / for commands, or enter message]", theme.dim),
+                Span::styled("[type \\ for commands, or enter message]", theme.dim),
             ]);
             frame.render_widget(Paragraph::new(line), inner);
             frame.set_cursor_position(Position::new(inner.x + prompt_width, inner.y));
@@ -260,12 +260,12 @@ impl Composer {
         }
 
         // Vertical command list when input is just "/"
-        if in_slash_mode && self.input == "/" {
+        if in_slash_mode && self.input == "\\" {
             let hint_style = Style::default().fg(Color::Rgb(255, 165, 80));
             let commands = [
-                "/quit", "/help", "/clear", "/status",
-                "/usage", "/auth list", "/auth add <cmd>",
-                "/auth remove <cmd>", "/auth edit", "/check", "/mode",
+                "\\quit", "\\help", "\\clear", "\\status",
+                "\\usage", "\\auth list", "\\auth add <cmd>",
+                "\\auth remove <cmd>", "\\auth edit", "\\check", "\\mode",
             ];
             for cmd in commands {
                 lines.push(Line::from(vec![
@@ -280,7 +280,7 @@ impl Composer {
 
         // Calculate cursor position using unicode width
         let (cursor_line, cursor_col) = self.cursor_line_col();
-        // Adjust for the hidden '/' in slash mode
+        // Adjust for the hidden '\\' in command mode
         let adjusted_col = if in_slash_mode && cursor_line == 0 {
             // cursor_col includes the '/', subtract 1 char width
             cursor_col.saturating_sub(1)
@@ -300,31 +300,31 @@ impl Composer {
 /// Get slash command hint text.
 fn slash_hint(input: &str) -> &'static str {
     match input {
-        "/q" | "/qu" | "/qui" | "/quit" => " ← exit session",
-        "/h" | "/he" | "/hel" | "/help" => " ← show commands",
-        "/mo" | "/mod" | "/mode" => " ← switch mode",
-        "/m" | "/model" => " ← change model",
-        "/c" | "/cl" | "/cle" | "/clea" | "/clear" => " ← clear viewport",
-        "/s" | "/st" | "/sta" | "/stat" | "/statu" | "/status" => " ← show status",
-        "/u" | "/us" | "/usa" | "/usag" | "/usage" => " ← session token/cost stats",
-        "/au" | "/aut" | "/auth" => " list|add|remove|edit",
-        "/auth l" | "/auth li" | "/auth lis" | "/auth list" => " ← show authorized commands",
-        "/auth a" | "/auth ad" | "/auth add" => " <command> ← add to allow list",
-        "/auth r" | "/auth re" | "/auth rem" | "/auth remo" | "/auth remov" | "/auth remove" => " <command> ← remove from allow list",
-        "/auth e" | "/auth ed" | "/auth edi" | "/auth edit" => " ← open in $EDITOR",
-        "/ch" | "/che" | "/chec" | "/check" => " ← system health check",
+        "\\q" | "\\qu" | "\\qui" | "\\quit" => " ← exit session",
+        "\\h" | "\\he" | "\\hel" | "\\help" => " ← show commands",
+        "\\mo" | "\\mod" | "\\mode" => " ← switch mode",
+        "\\m" | "\\model" => " ← change model",
+        "\\c" | "\\cl" | "\\cle" | "\\clea" | "\\clear" => " ← clear viewport",
+        "\\s" | "\\st" | "\\sta" | "\\stat" | "\\statu" | "\\status" => " ← show status",
+        "\\u" | "\\us" | "\\usa" | "\\usag" | "\\usage" => " ← session token/cost stats",
+        "\\au" | "\\aut" | "\\auth" => " list|add|remove|edit",
+        "\\auth l" | "\\auth li" | "\\auth lis" | "\\auth list" => " ← show authorized commands",
+        "\\auth a" | "\\auth ad" | "\\auth add" => " <command> ← add to allow list",
+        "\\auth r" | "\\auth re" | "\\auth rem" | "\\auth remo" | "\\auth remov" | "\\auth remove" => " <command> ← remove from allow list",
+        "\\auth e" | "\\auth ed" | "\\auth edi" | "\\auth edit" => " ← open in $EDITOR",
+        "\\ch" | "\\che" | "\\chec" | "\\check" => " ← system health check",
         _ => "",
     }
 }
 
-/// Autocomplete a partial slash command. Returns the full command if unambiguous.
+/// Autocomplete a partial command. Returns the full command if unambiguous.
 fn autocomplete_slash(input: &str) -> Option<String> {
     const COMMANDS: &[&str] = &[
-        "/quit", "/help", "/mode", "/model", "/clear",
-        "/status", "/usage", "/auth", "/check",
-        "/auth list", "/auth add", "/auth remove", "/auth edit",
+        "\\quit", "\\help", "\\mode", "\\model", "\\clear",
+        "\\status", "\\usage", "\\auth", "\\check",
+        "\\auth list", "\\auth add", "\\auth remove", "\\auth edit",
     ];
-    if input == "/" || input == "/auth " {
+    if input == "\\" || input == "\\auth " {
         return None; // too ambiguous
     }
     let matches: Vec<&&str> = COMMANDS.iter().filter(|c| c.starts_with(input)).collect();
