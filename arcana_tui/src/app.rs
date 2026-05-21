@@ -380,8 +380,10 @@ pub async fn interactive(
                                     "\\auth edit" => {
                                         let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
                                         let editor = config.editor.command.clone();
-                                        // Stop event reader to prevent keyboard leak
+                                        // Stop event reader completely before editor
                                         event_handle.abort();
+                                        let _ = (&mut event_handle).await; // wait for task to die
+                                        drop(events); // flush any buffered events
                                         tui.restore()?;
                                         // Run editor with full terminal control
                                         let _ = std::process::Command::new(&editor)
@@ -444,6 +446,8 @@ pub async fn interactive(
                                 let tmp = std::env::temp_dir().join("arcana_prompt.md");
                                 let _ = std::fs::write(&tmp, &app.composer.input);
                                 event_handle.abort();
+                                let _ = (&mut event_handle).await;
+                                drop(events);
                                 tui.restore()?;
                                 let _ = std::process::Command::new(&editor).arg(&tmp).status();
                                 tui = crate::tui::Tui::new()?;
