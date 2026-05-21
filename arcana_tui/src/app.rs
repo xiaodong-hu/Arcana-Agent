@@ -29,8 +29,6 @@ struct App {
     toasts: Vec<Toast>,
     show_banner: bool,
     should_quit: bool,
-    /// Index of the focused dialogue (by user message index in viewport.messages)
-    focused_dialogue: Option<usize>,
 }
 
 impl App {
@@ -55,7 +53,6 @@ impl App {
             toasts: Vec::new(),
             show_banner: true,
             should_quit: false,
-            focused_dialogue: None,
         }
     }
 
@@ -71,20 +68,16 @@ impl App {
                 self.panel_state.agents_expanded = !self.panel_state.agents_expanded;
             }
             KeyAction::Expand => {
-                // Ctrl+O: toggle thinking of focused dialogue only
-                if let Some(idx) = self.focused_dialogue {
-                    self.viewport.toggle_thinking_at(idx);
-                }
+                // Ctrl+O: toggle ALL thinking chains
+                self.viewport.toggle_thinking();
             }
             KeyAction::FocusDown => {
                 // Ctrl+j: scroll viewport down
                 self.viewport.scroll_down(3);
-                self.focused_dialogue = None; // will be determined by visible content
             }
             KeyAction::FocusUp => {
                 // Ctrl+k: scroll viewport up
                 self.viewport.scroll_up(3);
-                self.focused_dialogue = None;
             }
             KeyAction::ToggleQuery => {
                 if self.mode == ViewMode::QueryOverlay {
@@ -234,7 +227,7 @@ impl App {
             &self.panel_state, &self.skills, &self.agents, &self.tasks,
         );
 
-        self.viewport.render(frame, chunks[2], &self.theme, self.focused_dialogue);
+        self.viewport.render(frame, chunks[2], &self.theme);
 
         panels::render_task_panel(frame, chunks[3], &self.panel_state, &self.tasks);
 
@@ -430,8 +423,6 @@ pub async fn interactive(
                                         app.viewport.add_user_message(input.clone());
                                         app.viewport.is_streaming = true;
                                         app.show_banner = false;
-                                        // Focus the new dialogue
-                                        app.focused_dialogue = Some(app.viewport.messages.len() - 1);
 
                                         conversation.push(serde_json::json!({
                                             "role": "user", "content": input

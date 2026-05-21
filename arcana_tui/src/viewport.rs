@@ -123,15 +123,17 @@ impl Viewport {
     pub fn finalize_response_with_stats(&mut self, stats: Option<crate::types::ResponseStats>) {
         if !self.streaming_text.is_empty() || self.streaming_think.is_some() {
             let thinking = self.streaming_think.take().map(|t| ThinkingBlock {
-                content: t.content,
+                content: t.content.trim_end_matches('\n').to_string(),
                 token_count: t.token_count,
                 duration_ms: t.start_time.elapsed().as_millis() as u64,
-                collapsed: true, // collapsed by default
+                collapsed: true,
                 index: 0,
             });
+            let content = self.streaming_text.trim_end_matches('\n').to_string();
+            self.streaming_text.clear();
             let msg = Message {
                 role: MessageRole::Agent,
-                content: std::mem::take(&mut self.streaming_text),
+                content,
                 timestamp: chrono::Utc::now(),
                 thinking,
                 tool_calls: Vec::new(),
@@ -251,29 +253,15 @@ impl Viewport {
     }
 
     /// Render the viewport into the given area.
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme, focused_dialogue: Option<usize>) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         let block = Block::default().borders(Borders::NONE);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Pigment green for focus bar
-        const FOCUS_GREEN: Color = Color::Rgb(0, 166, 79);
-        const LIGHT_GRAY: Color = Color::Rgb(160, 160, 170);
-
-        // Split area: 2-char left margin for focus bar + content
-        let margin_width = 2u16;
-        let margin_area = Rect::new(inner.x, inner.y, margin_width, inner.height);
-        let content_area = Rect::new(inner.x + margin_width, inner.y, inner.width.saturating_sub(margin_width), inner.height);
-
-        // Build rendered lines from messages, tracking which msg_idx each line belongs to
+        // Build rendered lines from messages
         let mut lines: Vec<(usize, Line)> = Vec::new();
-        let mut focused_start_line: Option<usize> = None;
 
         for (msg_idx, msg) in self.messages.iter().enumerate() {
-            // Track where focused dialogue starts
-            if focused_dialogue == Some(msg_idx) {
-                focused_start_line = Some(lines.len());
-            }
 
             match msg.role {
                 MessageRole::User => {
@@ -364,6 +352,10 @@ impl Viewport {
                         theme.thinking_block,
                     ))));
                 }
+                // Padding during thinking
+                for _ in 0..5 {
+                    lines.push((stream_idx, Line::from("")));
+                }
             }
 
             if !self.streaming_text.is_empty() {
@@ -371,56 +363,32 @@ impl Viewport {
                     lines.push((stream_idx, styled_line(line, theme.agent_response)));
                 }
                 // Add padding so stats have room when they appear
-                lines.push((stream_idx, Line::from("")));
-                lines.push((stream_idx, Line::from("")));
+                for _ in 0..5 {
+                    lines.push((stream_idx, Line::from("")));
+                }
             }
         }
 
-        // Apply scroll offset — if focused, scroll to keep focused dialogue in upper third
+        // Simple scroll: during streaming always pin to bottom, otherwise use scroll_offset
         let total_lines = lines.len();
-        let visible_height = content_area.height as usize;
+        let visible_height = inner.height as usize;
 
-        let start_line = if let Some(focus_line) = focused_start_line {
-            if !self.auto_scroll {
-                // Place focused dialogue at ~1/3 from top
-                let target = focus_line.saturating_sub(visible_height / 3);
-                target.min(total_lines.saturating_sub(visible_height))
-            } else {
-                total_lines.saturating_sub(visible_height)
-            }
-        } else if self.auto_scroll || self.scroll_offset == 0 {
+        let start_line = if self.auto_scroll {
+            total_lines.saturating_sub(visible_height)
+        } else if self.scroll_offset == 0 {
             total_lines.saturating_sub(visible_height)
         } else {
             total_lines.saturating_sub(visible_height + self.scroll_offset)
         };
 
-        let visible_data: Vec<(usize, Line)> = lines
+        let visible_lines: Vec<Line> = lines
             .into_iter()
             .skip(start_line)
             .take(visible_height)
+            .map(|(_, line)| line)
             .collect();
 
-        // Render left margin (focus bar)
-        let margin_lines: Vec<Line> = visible_data.iter().map(|(msg_idx, _)| {
-            let in_focus = focused_dialogue.is_some_and(|f| {
-                if *msg_idx < f { return false; }
-                let next_user = self.messages[f + 1..].iter()
-                    .position(|m| m.role == MessageRole::User)
-                    .map(|p| f + 1 + p)
-                    .unwrap_or(self.messages.len());
-                *msg_idx >= f && *msg_idx < next_user
-            });
-            if in_focus {
-                Line::from(Span::styled("┃", Style::default().fg(FOCUS_GREEN)))
-            } else {
-                Line::from(Span::styled("│", Style::default().fg(Color::Rgb(60, 60, 70))))
-            }
-        }).collect();
-        frame.render_widget(Paragraph::new(margin_lines), margin_area);
-
-        // Render content
-        let content_lines: Vec<Line> = visible_data.into_iter().map(|(_, line)| line).collect();
-        let paragraph = Paragraph::new(content_lines).wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, content_area);
+        let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, inner);
     }
 }
