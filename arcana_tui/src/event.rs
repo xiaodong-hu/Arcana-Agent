@@ -117,6 +117,10 @@ pub enum KeyAction {
     ToggleAgents,
     /// Ctrl+/ (toggle query overlay)
     ToggleQuery,
+    /// Ctrl+j (focus next dialogue)
+    FocusDown,
+    /// Ctrl+k (focus previous dialogue)
+    FocusUp,
     /// Unknown / unhandled
     None,
 }
@@ -128,7 +132,8 @@ pub fn classify_key(key: &KeyEvent) -> KeyAction {
         (m, KeyCode::Char('c')) if m.contains(KeyModifiers::CONTROL) => KeyAction::Interrupt,
         (m, KeyCode::Char('d')) if m.contains(KeyModifiers::CONTROL) => KeyAction::EndSession,
         (m, KeyCode::Char('u')) if m.contains(KeyModifiers::CONTROL) => KeyAction::HalfPageUp,
-        (m, KeyCode::Char('j')) if m.contains(KeyModifiers::CONTROL) => KeyAction::Newline,
+        (m, KeyCode::Char('j')) if m.contains(KeyModifiers::CONTROL) => KeyAction::FocusDown,
+        (m, KeyCode::Char('k')) if m.contains(KeyModifiers::CONTROL) => KeyAction::FocusUp,
         (m, KeyCode::Char('\n')) if m.contains(KeyModifiers::CONTROL) => KeyAction::Newline,
         (m, KeyCode::Char('\r')) if m.contains(KeyModifiers::CONTROL) => KeyAction::Newline,
         (m, KeyCode::Char('o')) if m.contains(KeyModifiers::CONTROL) => KeyAction::Expand,

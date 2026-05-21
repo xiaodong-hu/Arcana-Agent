@@ -29,6 +29,8 @@ struct App {
     toasts: Vec<Toast>,
     show_banner: bool,
     should_quit: bool,
+    /// Index of the focused dialogue (by user message index in viewport.messages)
+    focused_dialogue: Option<usize>,
 }
 
 impl App {
@@ -53,6 +55,7 @@ impl App {
             toasts: Vec::new(),
             show_banner: true,
             should_quit: false,
+            focused_dialogue: None,
         }
     }
 
@@ -68,8 +71,38 @@ impl App {
                 self.panel_state.agents_expanded = !self.panel_state.agents_expanded;
             }
             KeyAction::Expand => {
-                // Ctrl+O: toggle thinking blocks expand/collapse
-                self.viewport.toggle_thinking();
+                // Ctrl+O: toggle thinking of focused dialogue only
+                if let Some(idx) = self.focused_dialogue {
+                    self.viewport.toggle_thinking_at(idx);
+                }
+            }
+            KeyAction::FocusDown => {
+                // Ctrl+j: move focus to next dialogue
+                let dialogues = self.viewport.dialogue_indices();
+                if dialogues.is_empty() { return; }
+                let next = match self.focused_dialogue {
+                    None => dialogues[0],
+                    Some(cur) => {
+                        let pos = dialogues.iter().position(|&i| i == cur).unwrap_or(0);
+                        dialogues[(pos + 1).min(dialogues.len() - 1)]
+                    }
+                };
+                self.focused_dialogue = Some(next);
+                self.viewport.scroll_to_dialogue(next);
+            }
+            KeyAction::FocusUp => {
+                // Ctrl+k: move focus to previous dialogue
+                let dialogues = self.viewport.dialogue_indices();
+                if dialogues.is_empty() { return; }
+                let prev = match self.focused_dialogue {
+                    None => *dialogues.last().unwrap(),
+                    Some(cur) => {
+                        let pos = dialogues.iter().position(|&i| i == cur).unwrap_or(0);
+                        dialogues[pos.saturating_sub(1)]
+                    }
+                };
+                self.focused_dialogue = Some(prev);
+                self.viewport.scroll_to_dialogue(prev);
             }
             KeyAction::ToggleQuery => {
                 if self.mode == ViewMode::QueryOverlay {
@@ -206,7 +239,7 @@ impl App {
             &self.panel_state, &self.skills, &self.agents, &self.tasks,
         );
 
-        self.viewport.render(frame, chunks[2], &self.theme);
+        self.viewport.render(frame, chunks[2], &self.theme, self.focused_dialogue);
 
         panels::render_task_panel(frame, chunks[3], &self.panel_state, &self.tasks);
 
@@ -425,19 +458,25 @@ pub async fn interactive(
                             // Handle Enter for overlay LLM dispatch
                             if action == KeyAction::Enter && !app.overlay.composer.is_empty() {
                                 let input = app.overlay.composer.take_input();
-                                app.overlay.messages.push(Message {
-                                    role: MessageRole::User,
-                                    content: input.clone(),
-                                    timestamp: chrono::Utc::now(),
-                                    thinking: None,
-                                    tool_calls: Vec::new(),
-                                });
-                                app.overlay.is_streaming = true;
+                                // Handle \hide command
+                                if input.trim() == "\\hide" {
+                                    app.overlay.hide();
+                                    app.mode = ViewMode::Main;
+                                } else {
+                                    app.overlay.messages.push(Message {
+                                        role: MessageRole::User,
+                                        content: input.clone(),
+                                        timestamp: chrono::Utc::now(),
+                                        thinking: None,
+                                        tool_calls: Vec::new(),
+                                    });
+                                    app.overlay.is_streaming = true;
 
-                                let msgs = app.overlay.build_messages();
-                                crate::llm::spawn_overlay_stream(
-                                    &config, msgs, event_tx.clone()
-                                );
+                                    let msgs = app.overlay.build_messages();
+                                    crate::llm::spawn_overlay_stream(
+                                        &config, msgs, event_tx.clone()
+                                    );
+                                }
                             } else {
                                 app.handle_overlay_key(action);
                             }

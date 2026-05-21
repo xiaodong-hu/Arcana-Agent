@@ -81,11 +81,11 @@ pub fn render_banner(frame: &mut Frame, area: Rect, theme: &Theme, status: &Stat
     let meta_y = tagline_y + 2;
     if meta_y < inner.height as usize {
         let meta1 = format!(
-            "Model: {:<24} Session: new",
+            "    Model:      {:<20} Session:    new",
             status.model_name
         );
         let meta2 = format!(
-            "Provider: {:<20} Sub-agents: query + spawn",
+            "    Provider:   {:<20} Sub-agents: query + spawn",
             "deepseek"
         );
 

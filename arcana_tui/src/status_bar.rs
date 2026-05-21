@@ -69,11 +69,11 @@ fn build_main_line<'a>(status: &StatusData, tasks: &[TaskInfo], skills: &[SkillI
         Span::styled("│", separator),
         Span::styled(format!(" {} {} ", bar, tokens_str), Style::default().fg(light_gray)),
         Span::styled("│", separator),
+        Span::styled(format!(" Tasks: {}/{} ", tasks_done, tasks_total), Style::default().fg(light_gray)),
+        Span::styled("│", separator),
         Span::styled(format!(" Sub-Agents: {} ", agents_count), Style::default().fg(light_gray)),
         Span::styled("│", separator),
-        Span::styled(format!(" Skills: {}/{} ", sys_skills, user_skills), Style::default().fg(light_gray)),
-        Span::styled("│", separator),
-        Span::styled(format!(" Tasks: {}/{} ", tasks_done, tasks_total), Style::default().fg(light_gray)),
+        Span::styled(format!(" Skills (System/User): {}/{} ", sys_skills, user_skills), Style::default().fg(light_gray)),
     ];
 
     Line::from(spans)

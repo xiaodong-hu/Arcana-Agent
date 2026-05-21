@@ -152,15 +152,39 @@ impl Viewport {
 
     /// Toggle all thinking blocks expand/collapse (Ctrl+O).
     pub fn toggle_thinking(&mut self) {
-        // Toggle the most recent thinking block, or all of them
         let any_expanded = self.messages.iter().any(|m| {
             m.thinking.as_ref().is_some_and(|t| !t.collapsed)
         });
         for msg in &mut self.messages {
             if let Some(ref mut t) = msg.thinking {
-                t.collapsed = any_expanded; // if any expanded, collapse all; else expand all
+                t.collapsed = any_expanded;
             }
         }
+    }
+
+    /// Toggle thinking for a specific dialogue (by user message index).
+    pub fn toggle_thinking_at(&mut self, user_msg_idx: usize) {
+        // Find the agent response following this user message
+        if user_msg_idx + 1 < self.messages.len() {
+            if let Some(ref mut t) = self.messages[user_msg_idx + 1].thinking {
+                t.collapsed = !t.collapsed;
+            }
+        }
+    }
+
+    /// Get indices of all user messages (each represents a dialogue).
+    pub fn dialogue_indices(&self) -> Vec<usize> {
+        self.messages.iter().enumerate()
+            .filter(|(_, m)| m.role == MessageRole::User)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Scroll so that the dialogue at the given index is in the upper-middle area.
+    pub fn scroll_to_dialogue(&mut self, _msg_idx: usize) {
+        // We'll handle this in the render by computing line offsets
+        // For now, disable auto_scroll so the focused view takes over
+        self.auto_scroll = false;
     }
 
     /// Add a user message.
@@ -227,52 +251,70 @@ impl Viewport {
     }
 
     /// Render the viewport into the given area.
-    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme, focused_dialogue: Option<usize>) {
         let block = Block::default().borders(Borders::NONE);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        // Build rendered lines from messages
-        let mut lines: Vec<Line> = Vec::new();
+        // Pigment green for focus bar
+        const FOCUS_GREEN: Color = Color::Rgb(0, 166, 79);
 
-        for msg in &self.messages {
+        // Build rendered lines from messages, tracking which msg_idx each line belongs to
+        let mut lines: Vec<(usize, Line)> = Vec::new();
+        let mut focused_start_line: Option<usize> = None;
+
+        for (msg_idx, msg) in self.messages.iter().enumerate() {
+            // Track where focused dialogue starts
+            if focused_dialogue == Some(msg_idx) {
+                focused_start_line = Some(lines.len());
+            }
+
+            let is_focused = focused_dialogue.is_some_and(|f| {
+                msg_idx == f || (msg_idx > f && msg_idx <= f + 2
+                    && self.messages.get(f).is_some_and(|m| m.role == MessageRole::User))
+            });
+
             match msg.role {
                 MessageRole::User => {
-                    lines.push(Line::from(vec![
+                    let mut spans = vec![
                         Span::styled("❯ ", theme.prompt_glyph),
                         Span::styled(&msg.content, theme.user_message),
-                    ]));
-                    lines.push(Line::from(""));
+                    ];
+                    if is_focused {
+                        spans.insert(0, Span::styled("┃ ", Style::default().fg(FOCUS_GREEN)));
+                    }
+                    lines.push((msg_idx, Line::from(spans)));
+                    lines.push((msg_idx, Line::from("")));
                 }
                 MessageRole::Agent => {
                     // Render thinking blocks (collapsed by default, Ctrl+O to expand)
                     if let Some(ref think) = msg.thinking {
                         if think.collapsed {
-                            lines.push(Line::from(vec![
+                            lines.push((msg_idx, Line::from(vec![
                                 Span::styled(
                                     format!("▸ Thinking ({} tokens, {:.1}s) ",
                                         think.token_count, think.duration_ms as f64 / 1000.0),
                                     theme.thinking_block,
                                 ),
                                 Span::styled("ctrl+o to expand", Style::default().fg(Color::Rgb(160, 160, 170))),
-                            ]));
-                            lines.push(Line::from(""));
+                            ])));
+                            lines.push((msg_idx, Line::from("")));
                         } else {
-                            lines.push(Line::from(vec![
+                            lines.push((msg_idx, Line::from(vec![
                                 Span::styled(
                                     format!("▾ Thinking ({} tokens, {:.1}s) ",
                                         think.token_count, think.duration_ms as f64 / 1000.0),
                                     theme.thinking_block,
                                 ),
                                 Span::styled("ctrl+o to collapse", Style::default().fg(Color::Rgb(160, 160, 170))),
-                            ]));
+                            ])));
                             for line in think.content.lines() {
-                                lines.push(styled_line(
+                                lines.push((msg_idx, styled_line(
                                     &format!("  {}", line),
                                     theme.thinking_block,
-                                ));
+                                )));
                             }
-                            lines.push(Line::from(""));
+                            lines.push((msg_idx, Line::from("")));
                         }
                     }
 
@@ -280,14 +322,14 @@ impl Viewport {
                     for tc in &msg.tool_calls {
                         let icon = tc.tool_type.icon();
                         let desc = format!("  {} {} ({:.1}s)", icon, tc.description, tc.duration_ms as f64 / 1000.0);
-                        lines.push(Line::from(Span::styled(desc, theme.tool_call)));
+                        lines.push((msg_idx, Line::from(Span::styled(desc, theme.tool_call))));
                     }
 
                     // Render response content
                     for line in msg.content.lines() {
-                        lines.push(styled_line(line, theme.agent_response));
+                        lines.push((msg_idx, styled_line(line, theme.agent_response)));
                     }
-                    lines.push(Line::from(""));
+                    lines.push((msg_idx, Line::from("")));
                 }
                 MessageRole::System => {
                     let style = if msg.content.starts_with("Cost:") || msg.content.starts_with('─') {
@@ -296,49 +338,56 @@ impl Viewport {
                         Style::default().fg(Color::White)
                     };
                     if msg.content.starts_with("Cost:") {
-                        lines.push(Line::from(""));
+                        lines.push((msg_idx, Line::from("")));
                     }
                     for line in msg.content.lines() {
-                        lines.push(Line::from(Span::styled(line.to_string(), style)));
+                        lines.push((msg_idx, Line::from(Span::styled(line.to_string(), style))));
                     }
                     if !msg.content.starts_with('─') {
-                        lines.push(Line::from(""));
+                        lines.push((msg_idx, Line::from("")));
                     }
                 }
             }
         }
 
         // Render streaming content
+        let stream_idx = self.messages.len();
         if self.is_streaming {
-            // Streaming thinking block
             if let Some(ref think) = self.streaming_think {
                 let header = format!("▾ Thinking ({}  tokens…)", think.token_count);
-                lines.push(Line::from(Span::styled(header, theme.thinking_block)));
+                lines.push((stream_idx, Line::from(Span::styled(header, theme.thinking_block))));
 
-                // Show last few lines of thinking
                 let think_lines: Vec<&str> = think.content.lines().collect();
                 let visible_count = (inner.height as usize / 3).max(3);
                 let start = think_lines.len().saturating_sub(visible_count);
                 for line in &think_lines[start..] {
-                    lines.push(Line::from(Span::styled(
+                    lines.push((stream_idx, Line::from(Span::styled(
                         format!("  {}", line),
                         theme.thinking_block,
-                    )));
+                    ))));
                 }
             }
 
-            // Streaming response text
             if !self.streaming_text.is_empty() {
                 for line in self.streaming_text.lines() {
-                    lines.push(styled_line(line, theme.agent_response));
+                    lines.push((stream_idx, styled_line(line, theme.agent_response)));
                 }
             }
         }
 
-        // Apply scroll offset
+        // Apply scroll offset — if focused, scroll to keep focused dialogue in upper third
         let total_lines = lines.len();
         let visible_height = inner.height as usize;
-        let start_line = if self.auto_scroll || self.scroll_offset == 0 {
+
+        let start_line = if let Some(focus_line) = focused_start_line {
+            if !self.auto_scroll {
+                // Place focused dialogue at ~1/3 from top
+                let target = focus_line.saturating_sub(visible_height / 3);
+                target.min(total_lines.saturating_sub(visible_height))
+            } else {
+                total_lines.saturating_sub(visible_height)
+            }
+        } else if self.auto_scroll || self.scroll_offset == 0 {
             total_lines.saturating_sub(visible_height)
         } else {
             total_lines.saturating_sub(visible_height + self.scroll_offset)
@@ -348,6 +397,7 @@ impl Viewport {
             .into_iter()
             .skip(start_line)
             .take(visible_height)
+            .map(|(_, line)| line)
             .collect();
 
         let paragraph = Paragraph::new(visible_lines).wrap(Wrap { trim: false });

@@ -45,7 +45,7 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        arcana (TUI)                               │  │
 │  │  ┌─────────────────────────────────────────────────────────────┐  │  │
-│  │  │ Status: ⚗ deepseek-v4-pro │ [████░░░░░░] 8.2K/1M | Sub-Agents: 0 | Loaded Skills: 3 | Tasks: 2/7 │  │  │
+│  │  │ Status: deepseek-v4-pro │ [████░░░░░░] 2k/1M │ Tasks: 2/7 | Sub-Agents: 3 │ Skills (System/User): 9/2 │  │  │
 │  │  ├─────────────────────────────────────────────────────────────┤  │  │
 │  │  │ Viewport (streaming responses, thinking blocks, diffs)      │  │  │
 │  │  ├─────────────────────────────────────────────────────────────┤  │  │
