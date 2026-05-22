@@ -412,9 +412,17 @@ Arcana-Agent/
 - [x] Interactive TUI shell (viewport, composer, status bar, keybindings)
 - [x] Collapsible task panel (Ctrl+T) with tree-style indicators
 - [x] Interactive LLM streaming — TUI session sends messages to DeepSeek with SSE streaming
-- [x] Thinking chain panel — collapsed by default, Ctrl+O to expand/collapse
+- [x] Thinking chain panel — collapsed by default, Ctrl+O to expand/collapse (works during streaming)
 - [x] `arcana auth status|allow|deny|revoke|reset` — command authorization management
 - [x] `~/.arcana/authority.toml` — hot-reloadable authority config (created on onboard)
+- [x] Query agent overlay — `Ctrl+/` toggles persistent query sub-agent with full streaming support
+- [x] Kitty keyboard protocol — reliable Ctrl+/, Ctrl+Enter, Shift+Enter detection
+- [x] Auto-scroll with cursor-tracking threshold algorithm (adapts to window resize)
+- [x] Editor integration — `Ctrl+E` opens `$EDITOR`, content flushed back to composer
+- [x] Multiline composer — `Ctrl+Enter`/`Shift+Enter` for newlines, faithful formatting
+- [x] History recall — `Up`/`Down` from empty prompt, breaks on any edit action
+- [x] Markdown rendering — syntax highlighting, inline code, compact newlines
+- [x] Welcome banner — gradient-colored ASCII art, scrollable in viewport history
 
 ### Not Yet Implemented
 - [ ] **Session management** — `arcana session list|resume|rename|delete|export|import`
@@ -425,7 +433,6 @@ Arcana-Agent/
 - [ ] **Embedding model download** — `arcana onboard` does not yet download `all-MiniLM-L6-v2.onnx`
 - [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery
 - [ ] **`arcana recover`** — restore project state from `git_record`
-- [ ] **Query agent overlay** — `?` overlay sends queries to a persistent sub-agent
 - [ ] **Tool calls** — shell execution, file read/write, search, web fetch
 - [ ] **Diff review panel** — interactive accept/reject of file mutations
 - [ ] **OpenAI / Anthropic provider support** — only DeepSeek is wired up

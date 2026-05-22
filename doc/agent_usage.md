@@ -291,8 +291,8 @@ Inside the overlay, type questions and get immediate responses:
 
 | Key | Action |
 |-----|--------|
-| `q` (composer empty) | Close overlay, return to main viewport |
-| `Esc` | Close overlay (always, even if composer has text — text is discarded) |
+| `Ctrl+/` | Close overlay, return to main viewport |
+| `Esc` | Close overlay, return to main viewport |
 
 The query agent remains alive after dismissal. Its overlay conversation is kept in memory for the session (scrollable if re-opened) but is NOT persisted to disk or memory stores.
 
@@ -460,8 +460,8 @@ These are available inside the interactive TUI session (typed in the composer):
 
 | Key | Action |
 |-----|--------|
-| `q` (composer empty) | Dismiss overlay |
-| `Esc` | Dismiss overlay (always) |
+| `Ctrl+/` | Dismiss overlay |
+| `Esc` | Dismiss overlay |
 | `Enter` | Send query |
 | `Alt+Enter` / `Ctrl+J` | Insert newline |
 
