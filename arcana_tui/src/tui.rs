@@ -2,6 +2,7 @@ use crossterm::{
     execute,
     event::{
         EnableBracketedPaste, DisableBracketedPaste,
+        EnableMouseCapture, DisableMouseCapture,
         PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
         KeyboardEnhancementFlags,
     },
@@ -16,12 +17,13 @@ pub struct Tui {
 }
 
 impl Tui {
-    /// Initialize the terminal (enter raw mode, alternate screen).
-    /// Mouse capture is NOT enabled so the terminal handles native text selection.
+    /// Initialize the terminal (enter raw mode, alternate screen, mouse capture).
+    /// Mouse capture is enabled so scroll events are received directly (not translated to Up/Down).
+    /// Use Shift+mouse for native text selection in most terminals.
     pub fn new() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         let mut out = stdout();
-        execute!(out, EnterAlternateScreen, EnableBracketedPaste)?;
+        execute!(out, EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
         let _ = execute!(
             out,
             PushKeyboardEnhancementFlags(
@@ -47,7 +49,7 @@ impl Tui {
     /// Suspend the TUI for running an external program (editor).
     pub fn suspend(&mut self) -> io::Result<()> {
         let _ = execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags);
-        execute!(self.terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
+        execute!(self.terminal.backend_mut(), DisableMouseCapture, DisableBracketedPaste, LeaveAlternateScreen)?;
         terminal::disable_raw_mode()?;
         Ok(())
     }
@@ -55,7 +57,7 @@ impl Tui {
     /// Resume the TUI after an external program exits.
     pub fn resume(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), EnterAlternateScreen, EnableBracketedPaste)?;
+        execute!(self.terminal.backend_mut(), EnterAlternateScreen, EnableBracketedPaste, EnableMouseCapture)?;
         let _ = execute!(
             self.terminal.backend_mut(),
             PushKeyboardEnhancementFlags(
@@ -72,7 +74,7 @@ impl Tui {
     pub fn restore(&mut self) -> io::Result<()> {
         let _ = execute!(self.terminal.backend_mut(), PopKeyboardEnhancementFlags);
         terminal::disable_raw_mode()?;
-        execute!(self.terminal.backend_mut(), DisableBracketedPaste, LeaveAlternateScreen)?;
+        execute!(self.terminal.backend_mut(), DisableMouseCapture, DisableBracketedPaste, LeaveAlternateScreen)?;
         Ok(())
     }
 }
