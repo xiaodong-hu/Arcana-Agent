@@ -126,6 +126,22 @@ deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
 
 Runtime management: `\auth list|add|remove|edit`
 
+#### LLM Authority Prompt
+
+The authority program auto-generates `.arcana/authorized_prompt.md` — a mandatory context file injected at the front of every LLM session. It tells the LLM:
+- What tools are available (with exact JSON call format)
+- Current read/write/exec/web permissions
+- How to communicate via the authority IPC socket
+
+```bash
+# View what the LLM sees:
+arcana auth prompt
+
+# Regenerated automatically on:
+# - Server startup
+# - Tool registration / permission hot-change
+```
+
 ---
 
 ### 2. Hot-Plug Multilayer Skill Module System
@@ -431,9 +447,9 @@ Arcana-Agent/
 - [ ] **Skills daemon** — trigger-based skill loading, hot-reload, manifest parsing
 - [ ] **Memory system** — knowledge DB, semantic search, error patterns, session recall
 - [ ] **Embedding model download** — `arcana onboard` does not yet download `all-MiniLM-L6-v2.onnx`
-- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery
+- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery (prompt generation implemented)
 - [ ] **`arcana recover`** — restore project state from `git_record`
-- [ ] **Tool calls** — shell execution, file read/write, search, web fetch
+- [ ] **Tool calls** — shell execution, file read/write, search, web fetch (IPC protocol implemented)
 - [ ] **Diff review panel** — interactive accept/reject of file mutations
 - [ ] **OpenAI / Anthropic provider support** — only DeepSeek is wired up
 - [ ] **Context caching** — leveraging DeepSeek's prefix caching for long contexts

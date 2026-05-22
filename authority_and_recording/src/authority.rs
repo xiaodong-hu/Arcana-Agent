@@ -117,6 +117,10 @@ impl Authority {
 
     pub fn project_root(&self) -> &Path { &self.project_root }
 
+    pub fn access_rules(&self) -> &AccessRules { &self.rules }
+    pub fn web_config(&self) -> &WebConfig { &self.web }
+    pub fn tools_config(&self) -> &ToolsConfig { &self.tools }
+
     fn default_verdict(&self) -> RuleVerdict {
         match self.rules.default.as_str() {
             "allow" => RuleVerdict::Allow,

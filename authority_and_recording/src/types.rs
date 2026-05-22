@@ -22,6 +22,8 @@ pub enum Request {
     Exec { cmd: String, args: Vec<String> },
     #[serde(rename = "register_tool")]
     RegisterTool { name: String, path: String, args: Vec<String>, description: String },
+    #[serde(rename = "prompt")]
+    Prompt,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

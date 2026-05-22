@@ -7,6 +7,7 @@ use std::process::Command;
 use sha2::{Digest, Sha256};
 
 use crate::authority::Authority;
+use crate::prompt;
 use crate::record::Record;
 use crate::types::{AccessLevel, Request, Response, RuleVerdict};
 
@@ -16,6 +17,7 @@ pub struct Server {
     record: Record,
     web_cache_dir: PathBuf,
     tmp_dir: PathBuf,
+    prompt_path: PathBuf,
 }
 
 impl Server {
@@ -23,6 +25,7 @@ impl Server {
         let socket_path = project_root.join(".arcana/authority.sock");
         let web_cache_dir = project_root.join(".arcana/web_cache");
         let tmp_dir = project_root.join(".arcana/tmp");
+        let prompt_path = project_root.join(".arcana/authorized_prompt.md");
         let authority = Authority::load(project_root.clone())?;
         let record = Record::open(&project_root)?;
 
@@ -31,7 +34,12 @@ impl Server {
         fs::create_dir_all(web_cache_dir.join("pages"))?;
         fs::create_dir_all(&tmp_dir)?;
 
-        Ok(Self { socket_path, authority, record, web_cache_dir, tmp_dir })
+        // Generate authorized_prompt.md on startup
+        let prompt_content = prompt::generate_prompt(&authority);
+        fs::write(&prompt_path, &prompt_content)?;
+        eprintln!("[arcana] Generated {:?}", prompt_path);
+
+        Ok(Self { socket_path, authority, record, web_cache_dir, tmp_dir, prompt_path })
     }
 
     pub fn run(&mut self) -> io::Result<()> {
@@ -72,6 +80,7 @@ impl Server {
             Request::Fetch { url, tag: _ } => self.handle_fetch(&url),
             Request::Exec { cmd, args } => self.handle_exec(&cmd, &args),
             Request::RegisterTool { name, path, args, description } => self.handle_register_tool(&name, &path, &args, &description),
+            Request::Prompt => self.handle_prompt(),
         }
     }
 
@@ -199,7 +208,15 @@ impl Server {
         if !self.authority.prompt_user("register_tool", &msg) {
             return Ok(Response::Denied { reason: "user denied registration".into() });
         }
+        // Regenerate prompt after tool registration
+        let content = prompt::generate_prompt(&self.authority);
+        fs::write(&self.prompt_path, &content)?;
         Ok(Response::Ok)
+    }
+
+    fn handle_prompt(&self) -> io::Result<Response> {
+        let content = prompt::generate_prompt(&self.authority);
+        Ok(Response::Content { data: content })
     }
 
     fn authorize_write(&self, path: &str) -> bool {
