@@ -126,21 +126,25 @@ deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
 
 Runtime management: `\auth list|add|remove|edit`
 
-#### LLM Authority Prompt
+#### LLM Authority Instruction
 
-The authority program auto-generates `.arcana/authorized_prompt.md` — a mandatory context file injected at the front of every LLM session. It tells the LLM:
-- What tools are available (with exact JSON call format)
-- Current read/write/exec/web permissions
-- How to communicate via the authority IPC socket
+The authority program reads the human-maintained authority instruction and auto-generates `.arcana/authorized_prompt.md` as mandatory first-line LLM context. The instruction stays API-only; current filesystem, command, and network policy is exposed separately as a structured authority snapshot.
+
+Agents interact with authority by sending JSONL requests to the session authority socket:
 
 ```bash
-# View what the LLM sees:
-arcana auth prompt
-
-# Regenerated automatically on:
-# - Server startup
-# - Tool registration / permission hot-change
+# View the instruction text:
+arcana auth instruction
 ```
+
+```json
+{"op":"instruction"}
+{"op":"list_authority"}
+{"op":"query","path":"README.md"}
+{"op":"fetch","url":"https://example.com","tag":null}
+```
+
+The generated prompt is refreshed on server startup and after runtime authority changes.
 
 ---
 

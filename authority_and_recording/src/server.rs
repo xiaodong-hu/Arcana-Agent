@@ -35,7 +35,7 @@ impl Server {
         fs::create_dir_all(&tmp_dir)?;
 
         // Generate authorized_prompt.md on startup
-        let prompt_content = prompt::generate_prompt(&authority);
+        let prompt_content = prompt::generate_prompt(&authority)?;
         fs::write(&prompt_path, &prompt_content)?;
         eprintln!("[arcana] Generated {:?}", prompt_path);
 
@@ -80,6 +80,8 @@ impl Server {
             Request::Fetch { url, tag: _ } => self.handle_fetch(&url),
             Request::Exec { cmd, args } => self.handle_exec(&cmd, &args),
             Request::RegisterTool { name, path, args, description } => self.handle_register_tool(&name, &path, &args, &description),
+            Request::Instruction => self.handle_instruction(),
+            Request::ListAuthority => Ok(Response::Authority { snapshot: self.authority.snapshot() }),
             Request::Prompt => self.handle_prompt(),
         }
     }
@@ -177,7 +179,7 @@ impl Server {
     }
 
     fn handle_exec(&self, cmd: &str, args: &[String]) -> io::Result<Response> {
-        let allowed = match self.authority.check_tool(cmd) {
+        let allowed = match self.authority.check_tool(cmd, args) {
             RuleVerdict::Allow => true,
             RuleVerdict::Deny => false,
             RuleVerdict::Prompt => {
@@ -209,14 +211,19 @@ impl Server {
             return Ok(Response::Denied { reason: "user denied registration".into() });
         }
         // Regenerate prompt after tool registration
-        let content = prompt::generate_prompt(&self.authority);
+        let content = prompt::generate_prompt(&self.authority)?;
         fs::write(&self.prompt_path, &content)?;
         Ok(Response::Ok)
     }
 
     fn handle_prompt(&self) -> io::Result<Response> {
-        let content = prompt::generate_prompt(&self.authority);
-        Ok(Response::Content { data: content })
+        let content = prompt::generate_prompt(&self.authority)?;
+        Ok(Response::Instruction { content })
+    }
+
+    fn handle_instruction(&self) -> io::Result<Response> {
+        let content = prompt::load_instruction()?;
+        Ok(Response::Instruction { content })
     }
 
     fn authorize_write(&self, path: &str) -> bool {

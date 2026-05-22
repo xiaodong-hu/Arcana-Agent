@@ -22,6 +22,10 @@ pub enum Request {
     Exec { cmd: String, args: Vec<String> },
     #[serde(rename = "register_tool")]
     RegisterTool { name: String, path: String, args: Vec<String>, description: String },
+    #[serde(rename = "instruction")]
+    Instruction,
+    #[serde(rename = "list_authority")]
+    ListAuthority,
     #[serde(rename = "prompt")]
     Prompt,
 }
@@ -41,6 +45,10 @@ pub enum Response {
     Fetched { path: String, bytes: u64 },
     #[serde(rename = "exec_result")]
     ExecResult { stdout: String, stderr: String, code: i32 },
+    #[serde(rename = "instruction")]
+    Instruction { content: String },
+    #[serde(rename = "authority")]
+    Authority { snapshot: AuthoritySnapshot },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +68,7 @@ pub enum RuleVerdict {
     Prompt,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessConfig {
     pub rules: AccessRules,
     #[serde(default)]
@@ -69,7 +77,7 @@ pub struct AccessConfig {
     pub tools: ToolsConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessRules {
     #[serde(default)]
     pub allow_write: Vec<String>,
@@ -81,7 +89,7 @@ pub struct AccessRules {
     pub default: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebConfig {
     #[serde(default = "default_prompt")]
     pub default: String,
@@ -97,10 +105,12 @@ impl Default for WebConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
     #[serde(default)]
     pub allow: Vec<String>,
+    #[serde(default)]
+    pub prompt: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
     #[serde(default = "default_true")]
@@ -111,12 +121,26 @@ pub struct ToolsConfig {
 
 impl Default for ToolsConfig {
     fn default() -> Self {
-        Self { allow: vec![], deny: vec![], allow_runtime_registration: true, default: "prompt".into() }
+        Self {
+            allow: vec![],
+            prompt: vec![],
+            deny: vec![],
+            allow_runtime_registration: true,
+            default: "prompt".into(),
+        }
     }
 }
 
 fn default_prompt() -> String { "prompt".into() }
 fn default_true() -> bool { true }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthoritySnapshot {
+    pub filesystem: AccessRules,
+    pub network: WebConfig,
+    pub commands: ToolsConfig,
+    pub runtime_tools: Vec<String>,
+}
 
 // === Action Record ===
 

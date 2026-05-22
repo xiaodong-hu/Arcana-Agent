@@ -1,121 +1,80 @@
+use std::env;
+use std::fs;
+use std::io;
+use std::path::PathBuf;
+
 use crate::authority::Authority;
 
-/// Generate the authorized prompt markdown that tells the LLM what tools and
-/// permissions are available, and how to invoke them via the authority socket.
-pub fn generate_prompt(authority: &Authority) -> String {
+const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority Interface
+
+Use the Arcana Authority System for every filesystem mutation, command execution, network request, and runtime tool change. Ask the authority system when permission is unclear.
+
+Communicate with the authority process over the session IPC channel by sending one JSON object per line. Each request returns one JSON object on one line.
+
+## Discovery
+
+```json
+{"op":"instruction"}
+{"op":"list_authority"}
+{"op":"query","path":"README.md"}
+```
+
+## Operations
+
+```json
+{"op":"read","path":"README.md"}
+{"op":"write","path":"notes.md","content":"<base64-bytes>"}
+{"op":"delete","path":"notes.md"}
+{"op":"rename","src":"old.md","dst":"new.md"}
+{"op":"exec","cmd":"cargo","args":["test"]}
+{"op":"fetch","url":"https://example.com","tag":null}
+{"op":"register_tool","name":"tool-name","path":"binary-or-script","args":[],"description":"what it does"}
+```
+
+`read` returns base64 file content. `write` requires base64 file content. If a request is denied, stop and report the denial to the user.
+"#;
+
+/// Read the human-maintained agent instruction, creating a compact default
+/// only when the user has not created one yet.
+pub fn load_or_create_instruction() -> io::Result<String> {
+    let path = instruction_path()?;
+    if path.exists() {
+        return fs::read_to_string(path);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, DEFAULT_INSTRUCTION)?;
+    Ok(DEFAULT_INSTRUCTION.to_string())
+}
+
+pub fn load_instruction() -> io::Result<String> {
+    let path = instruction_path()?;
+    fs::read_to_string(path)
+}
+
+/// Generate the mandatory first-line LLM context. The user instruction explains
+/// how to call authority APIs; the snapshot is machine-readable current policy.
+pub fn generate_prompt(authority: &Authority) -> io::Result<String> {
+    let instruction = load_or_create_instruction()?;
+    let snapshot = serde_json::to_string_pretty(&authority.snapshot())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
     let mut out = String::new();
+    out.push_str(instruction.trim_end());
+    out.push_str("\n\n## Session Authority Channel\n\n");
+    out.push_str("Send JSONL requests to the Unix socket `.arcana/authority.sock`.\n");
+    out.push_str("Use `instruction` to reload this interface and `list_authority` to reload current policy.\n");
+    out.push_str("\n## Current Authority Snapshot\n\n```json\n");
+    out.push_str(&snapshot);
+    out.push_str("\n```\n");
+    out.push_str("\nThis snapshot is informational. Enforce decisions by sending requests to the authority system.\n");
+    Ok(out)
+}
 
-    out.push_str("# Arcana Authority — Available Tools & Permissions\n\n");
-    out.push_str("You are operating under the Arcana authority system. ALL file operations, \
-                  command execution, and web access MUST go through the authority IPC socket.\n\n");
-    out.push_str("## IPC Protocol\n\n");
-    out.push_str("Send one JSON object per line to the unix socket at `.arcana/authority.sock`.\n");
-    out.push_str("Each request gets one JSON response line.\n\n");
-
-    // Tools section
-    out.push_str("## Available Operations\n\n");
-    out.push_str("### File Read\n");
-    out.push_str("```json\n{\"op\": \"read\", \"path\": \"<relative_path>\"}\n```\n");
-    out.push_str("Response: `{\"status\": \"content\", \"data\": \"<base64>\"}` or `{\"status\": \"denied\", \"reason\": \"...\"}`\n\n");
-
-    out.push_str("### File Write\n");
-    out.push_str("```json\n{\"op\": \"write\", \"path\": \"<relative_path>\", \"content\": \"<base64>\"}\n```\n");
-    out.push_str("Response: `{\"status\": \"ok\"}` or `{\"status\": \"denied\", \"reason\": \"...\"}`\n\n");
-
-    out.push_str("### File Delete\n");
-    out.push_str("```json\n{\"op\": \"delete\", \"path\": \"<relative_path>\"}\n```\n\n");
-
-    out.push_str("### File Rename\n");
-    out.push_str("```json\n{\"op\": \"rename\", \"src\": \"<path>\", \"dst\": \"<path>\"}\n```\n\n");
-
-    out.push_str("### Query Permission\n");
-    out.push_str("```json\n{\"op\": \"query\", \"path\": \"<relative_path>\"}\n```\n");
-    out.push_str("Response: `{\"status\": \"permission\", \"level\": \"none|read|write\"}`\n\n");
-
-    out.push_str("### Execute Command\n");
-    out.push_str("```json\n{\"op\": \"exec\", \"cmd\": \"<command>\", \"args\": [\"arg1\", \"arg2\"]}\n```\n");
-    out.push_str("Response: `{\"status\": \"exec_result\", \"stdout\": \"...\", \"stderr\": \"...\", \"code\": 0}`\n\n");
-
-    out.push_str("### Web Fetch\n");
-    out.push_str("```json\n{\"op\": \"fetch\", \"url\": \"<url>\", \"tag\": null}\n```\n");
-    out.push_str("Response: `{\"status\": \"fetched\", \"path\": \"<cache_path>\", \"bytes\": N}`\n\n");
-
-    out.push_str("### Register Tool\n");
-    out.push_str("```json\n{\"op\": \"register_tool\", \"name\": \"<name>\", \"path\": \"<binary>\", \"args\": [], \"description\": \"...\"}\n```\n\n");
-
-    // Current permissions
-    out.push_str("## Current Permissions\n\n");
-
-    let rules = authority.access_rules();
-    out.push_str("### Write Access\n");
-    if rules.allow_write.is_empty() {
-        out.push_str("- No paths pre-approved for write (will prompt user)\n");
-    } else {
-        for p in &rules.allow_write {
-            out.push_str(&format!("- ✓ `{}`\n", p));
-        }
-    }
-    if !rules.deny_write.is_empty() {
-        out.push_str("\nDenied (never writable):\n");
-        for p in &rules.deny_write {
-            out.push_str(&format!("- ✗ `{}`\n", p));
-        }
-    }
-    out.push_str(&format!("\nDefault for unlisted paths: **{}**\n\n", rules.default));
-
-    out.push_str("### Read Access\n");
-    if rules.deny_read.is_empty() {
-        out.push_str("- All files readable (no deny rules)\n");
-    } else {
-        out.push_str("Denied (invisible to you):\n");
-        for p in &rules.deny_read {
-            out.push_str(&format!("- ✗ `{}`\n", p));
-        }
-    }
-    out.push('\n');
-
-    // Web access
-    let web = authority.web_config();
-    out.push_str("### Web Access\n");
-    if !web.allow_domains.is_empty() {
-        out.push_str("Allowed domains:\n");
-        for d in &web.allow_domains {
-            out.push_str(&format!("- ✓ `{}`\n", d));
-        }
-    }
-    if !web.deny_domains.is_empty() {
-        out.push_str("Denied domains:\n");
-        for d in &web.deny_domains {
-            out.push_str(&format!("- ✗ `{}`\n", d));
-        }
-    }
-    out.push_str(&format!("Default: **{}**\n\n", web.default));
-
-    // Tools
-    let tools = authority.tools_config();
-    out.push_str("### Command Execution\n");
-    if !tools.allow.is_empty() {
-        out.push_str("Pre-approved commands:\n");
-        for t in &tools.allow {
-            out.push_str(&format!("- ✓ `{}`\n", t));
-        }
-    }
-    if !tools.deny.is_empty() {
-        out.push_str("Denied commands:\n");
-        for t in &tools.deny {
-            out.push_str(&format!("- ✗ `{}`\n", t));
-        }
-    }
-    out.push_str(&format!("Runtime tool registration: **{}**\n", if tools.allow_runtime_registration { "enabled" } else { "disabled" }));
-    out.push_str(&format!("Default for unlisted commands: **{}**\n\n", tools.default));
-
-    // Important notes
-    out.push_str("## Important Notes\n\n");
-    out.push_str("- All file writes are **recorded** and recoverable. Every mutation is logged.\n");
-    out.push_str("- If a request is denied, do NOT retry — inform the user.\n");
-    out.push_str("- Operations with `default = \"prompt\"` will ask the human for approval. Wait for the response.\n");
-    out.push_str("- File content in `write` requests must be base64-encoded.\n");
-    out.push_str("- File content in `read` responses is base64-encoded.\n");
-
-    out
+fn instruction_path() -> io::Result<PathBuf> {
+    let home = env::var_os("HOME")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME is not set"))?;
+    Ok(PathBuf::from(home).join(".arcana").join("INSTRUCTION.md"))
 }

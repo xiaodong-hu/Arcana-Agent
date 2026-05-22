@@ -11,7 +11,16 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    // Subcommand: `authority_and_recording auth prompt [project_root]`
+    // Subcommand: `authority_and_recording auth instruction [project_root]`
+    if args.len() >= 3 && args[1] == "auth" && args[2] == "instruction" {
+        match prompt::load_or_create_instruction() {
+            Ok(content) => print!("{}", content),
+            Err(e) => { eprintln!("[arcana] Error: {}", e); process::exit(1); }
+        }
+        return;
+    }
+
+    // Compatibility subcommand: print the full injected prompt.
     if args.len() >= 3 && args[1] == "auth" && args[2] == "prompt" {
         let root = args.get(3).map(PathBuf::from)
             .unwrap_or_else(|| env::current_dir().expect("cannot get cwd"));
@@ -47,7 +56,7 @@ fn main() {
 /// Generate and print the authorized prompt without starting the server.
 fn run_prompt(project_root: &PathBuf) -> std::io::Result<String> {
     let auth = authority::Authority::load(project_root.clone())?;
-    let content = prompt::generate_prompt(&auth);
+    let content = prompt::generate_prompt(&auth)?;
     // Also write to .arcana/authorized_prompt.md
     let prompt_path = project_root.join(".arcana/authorized_prompt.md");
     std::fs::create_dir_all(prompt_path.parent().unwrap())?;
