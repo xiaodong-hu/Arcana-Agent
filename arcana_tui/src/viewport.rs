@@ -409,6 +409,38 @@ impl Viewport {
             }
         }
 
+        // Wrap lines to viewport width so each entry = one visual row
+        let panel_width = inner.width as usize;
+        let mut wrapped: Vec<(usize, Line)> = Vec::new();
+        for (idx, line) in lines {
+            let line_w: usize = line.spans.iter()
+                .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            if line_w <= panel_width || panel_width == 0 {
+                wrapped.push((idx, line));
+            } else {
+                let full_text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+                let style = line.spans.first().map(|s| s.style).unwrap_or_default();
+                let mut remaining = full_text.as_str();
+                while !remaining.is_empty() {
+                    let mut byte_end = 0;
+                    let mut w = 0;
+                    for (i, ch) in remaining.char_indices() {
+                        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                        if w + cw > panel_width { break; }
+                        w += cw;
+                        byte_end = i + ch.len_utf8();
+                    }
+                    if byte_end == 0 && !remaining.is_empty() {
+                        byte_end = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+                    }
+                    wrapped.push((idx, Line::from(Span::styled(remaining[..byte_end].to_string(), style))));
+                    remaining = &remaining[byte_end..];
+                }
+            }
+        }
+        let lines = wrapped;
+
         // --- Auto-scroll algorithm ---
         // 1. Determine cursor position (line index in `lines`)
         let cursor_line = if self.is_streaming {

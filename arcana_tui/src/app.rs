@@ -122,7 +122,7 @@ impl App {
             KeyAction::Home => { self.composer.move_home(); }
             KeyAction::End => { self.composer.move_end(); }
             KeyAction::Up => {
-                if self.composer.is_empty() {
+                if self.composer.is_empty() || self.composer.history_index.is_some() {
                     self.composer.recall_previous();
                 }
             }
@@ -182,7 +182,7 @@ impl App {
             KeyAction::JumpTop => { self.overlay.composer.jump_top(); }
             KeyAction::JumpBottom => { self.overlay.composer.jump_bottom(); }
             KeyAction::Up => {
-                if self.overlay.composer.is_empty() {
+                if self.overlay.composer.is_empty() || self.overlay.composer.history_index.is_some() {
                     self.overlay.composer.recall_previous();
                 }
             }
