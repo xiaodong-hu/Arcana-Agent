@@ -217,20 +217,24 @@ impl Server {
         let cache_file = self.web_cache_dir.join("pages").join(&url_hash);
 
         if !cache_file.exists() {
-            let output = Command::new("curl")
-                .args([
-                    "-sL", "--max-time", "30",
-                    "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                    "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "-H", "Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-                    "-o",
-                ])
-                .arg(&cache_file).arg(url).output()?;
-            if !output.status.success() {
+            // Try curl first (most robust), then wget, then w3m -dump.
+            let fetched = try_curl_fetch(url, &cache_file)
+                .or_else(|e| {
+                    eprintln!("[arcana] curl failed for {url}: {e}; trying wget...");
+                    try_wget_fetch(url, &cache_file)
+                })
+                .or_else(|e| {
+                    eprintln!("[arcana] wget failed for {url}: {e}; trying w3m -dump...");
+                    try_w3m_fetch(url, &cache_file)
+                });
+
+            if let Err(e) = fetched {
+                eprintln!("[arcana] All fetch methods failed for {url}: {e}");
                 return Ok(Response::Denied {
-                    reason: "fetch failed".into(),
+                    reason: format!("fetch failed: {e}"),
                 });
             }
+
             let index_path = self.web_cache_dir.join("index.jsonl");
             let mut idx = OpenOptions::new()
                 .create(true)
@@ -417,4 +421,108 @@ fn base64_decode(s: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+// ---------------------------------------------------------------------------
+// Multi-tool fetch helpers (tried in order)
+// ---------------------------------------------------------------------------
+
+/// Common browser-emulation headers shared by all fetch methods.
+const BROWSER_HEADERS: &[&str] = &[
+    "-H",
+    "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "-H",
+    "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "-H",
+    "Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+    "-H",
+    "Accept-Encoding: gzip, deflate, br",
+    "-H",
+    "DNT: 1",
+    "-H",
+    "Upgrade-Insecure-Requests: 1",
+];
+
+/// Try curl with retries and browser headers.
+fn try_curl_fetch(url: &str, out_path: &PathBuf) -> Result<(), String> {
+    for attempt in 1..=3 {
+        let status = Command::new("curl")
+            .args([
+                "-sL",
+                "--compressed",
+                "--max-time",
+                "30",
+                "--retry",
+                "0",
+                "--http2",
+            ])
+            .args(BROWSER_HEADERS)
+            .args(["-o"])
+            .arg(out_path)
+            .arg(url)
+            .status()
+            .map_err(|e| format!("curl spawn failed: {e}"))?;
+
+        if status.success() {
+            // Verify we got actual content, not an empty file
+            if let Ok(meta) = std::fs::metadata(out_path) {
+                if meta.len() > 0 {
+                    return Ok(());
+                }
+            }
+        }
+
+        if attempt < 3 {
+            std::thread::sleep(std::time::Duration::from_millis(500 * attempt));
+        }
+    }
+    Err("curl: all attempts failed".into())
+}
+
+/// Try wget with browser headers.
+fn try_wget_fetch(url: &str, out_path: &PathBuf) -> Result<(), String> {
+    let status = Command::new("wget")
+        .args(["-q", "--timeout=30", "--tries=2"])
+        .args(
+            BROWSER_HEADERS
+                .iter()
+                .flat_map(|h| ["--header", h.strip_prefix("-H ").unwrap_or(h)]),
+        )
+        .args(["-O"])
+        .arg(out_path)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("wget spawn failed: {e}"))?;
+
+    if status.success() {
+        if let Ok(meta) = std::fs::metadata(out_path) {
+            if meta.len() > 0 {
+                return Ok(());
+            }
+        }
+    }
+    Err("wget: fetch failed".into())
+}
+
+/// Try w3m -dump (text-mode browser, no JS execution, safe).
+fn try_w3m_fetch(url: &str, out_path: &PathBuf) -> Result<(), String> {
+    let output = Command::new("w3m")
+        .args(["-dump", "-no-graph", "-cols", "120"])
+        .arg(url)
+        .output()
+        .map_err(|e| format!("w3m spawn failed: {e}"))?;
+
+    if output.status.success() && !output.stdout.is_empty() {
+        // w3m -dump outputs rendered plain text to stdout — write it to the cache file.
+        std::fs::write(out_path, &output.stdout).map_err(|e| format!("w3m write failed: {e}"))?;
+        return Ok(());
+    }
+    // w3m may also have useful stderr for debugging
+    if !output.stderr.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!("[arcana] w3m stderr for {url}: {stderr}");
+        }
+    }
+    Err("w3m: fetch failed".into())
 }
