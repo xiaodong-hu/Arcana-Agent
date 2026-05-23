@@ -52,10 +52,12 @@ async fn main() {
         process::exit(1);
     }
 
-    // Ensure ~/.arcana exists on every launch
-    if let Err(e) = Config::ensure_home() {
-        eprintln!("[Arcana] Failed to create ~/.arcana: {}", e);
-        process::exit(1);
+    // Enforce global workspace: if ~/.arcana is missing, prompt to create it.
+    // This runs for EVERY launch except `onboard` (which creates it itself).
+    if !cli.command.as_ref().is_some_and(|c| matches!(c, Command::Onboard(_))) {
+        if !ensure_global_workspace() {
+            process::exit(0);
+        }
     }
 
     let result = match cli.command {
@@ -134,6 +136,52 @@ fn resolve_project_path(project_arg: Option<PathBuf>) -> Option<PathBuf> {
                 eprintln!("Aborted.");
                 None
             }
+        }
+    }
+}
+
+/// Check whether `~/.arcana` (the global system workspace) exists.
+/// If not, prompt the user to create it.  Returns `true` if it exists
+/// or was created, `false` if the user declined.
+fn ensure_global_workspace() -> bool {
+    let home = match dirs::home_dir() {
+        Some(d) => d,
+        None => {
+            eprintln!("[Arcana] Cannot determine home directory.");
+            return false;
+        }
+    };
+    let global_dir = home.join(".arcana");
+    if global_dir.exists() {
+        return true;
+    }
+
+    eprintln!();
+    eprintln!(
+        "The Arcana system workspace `{}` does not exist.",
+        global_dir.display()
+    );
+    eprintln!("It is required for configuration, memory, skills, and authority.");
+    eprint!("Create it now? [y/c = yes, n/q = no]: ");
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    if io::stdin().read_line(&mut input).is_err() {
+        eprintln!("\n[Arcana] Aborted.");
+        return false;
+    }
+    match input.trim().to_lowercase().as_str() {
+        "y" | "yes" | "c" | "continue" => {
+            if let Err(e) = std::fs::create_dir_all(&global_dir) {
+                eprintln!("[Arcana] Failed to create {}: {}", global_dir.display(), e);
+                return false;
+            }
+            eprintln!("[Arcana] Created system workspace at {}", global_dir.display());
+            true
+        }
+        _ => {
+            eprintln!("[Arcana] Aborted.  Run `arcana onboard` to set up the workspace.");
+            false
         }
     }
 }

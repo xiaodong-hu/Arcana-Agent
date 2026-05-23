@@ -507,10 +507,12 @@ pub async fn interactive(
   \\usage         Session token/cost stats\n\
   \\working_dir   Show current working directory\n\
   \\check         System health check\n\
-  \\auth list     Show authorized commands\n\
+  \\auth show     Show authority config\n\
   \\auth add      Add command to allow list\n\
   \\auth remove   Remove from allow list\n\
   \\auth edit     Open authority.toml in $EDITOR\n\
+  \\config show   Show ~/.arcana/config.toml\n\
+  \\config edit   Open config.toml in $EDITOR\n\
 \n\
 Hotkeys:\n\
   Ctrl+e         Open $EDITOR for prompt\n\
@@ -524,8 +526,7 @@ Hotkeys:\n\
   Ctrl+Enter     New line in prompt\n\
   Home/End       Start/end of current line\n\
   Ctrl+b         Stop LLM generation\n\
-  Ctrl+c         Clear prompt\n\
-  \\quit          Exit session"
+  Ctrl+c         Clear prompt"
                                                 .into(),
                                         );
                                     }
@@ -556,7 +557,7 @@ Hotkeys:\n\
                                             "Working directory:\n  {cwd}\n\nWorkspace:\n  {cwd}/.arcana/"
                                         ));
                                     }
-                                    "\\auth" | "\\auth list" => {
+                                    "\\auth" | "\\auth show" => {
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -574,6 +575,45 @@ Hotkeys:\n\
                                                     .into(),
                                             );
                                         }
+                                    }
+                                    "\\config" | "\\config show" => {
+                                        let path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".arcana/config.toml");
+                                        if path.exists() {
+                                            if let Ok(content) = std::fs::read_to_string(&path) {
+                                                app.viewport.add_error_message(format!(
+                                                    "Config: {}\n\n{}",
+                                                    path.display(),
+                                                    content
+                                                ));
+                                            }
+                                        } else {
+                                            app.viewport.add_error_message(
+                                                "No config.toml found. Run: arcana onboard"
+                                                    .into(),
+                                            );
+                                        }
+                                    }
+                                    "\\config edit" => {
+                                        let path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".arcana/config.toml");
+                                        let editor = config.editor.command.clone();
+                                        event_handle.abort();
+                                        tui.suspend()?;
+                                        let _ = std::process::Command::new(&editor)
+                                            .arg(&path)
+                                            .status();
+                                        tui.resume()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+                                        app.composer.clear();
+                                        app.viewport.add_error_message(
+                                            format!("Config reloaded from {}", path.display())
+                                        );
                                     }
                                     cmd if cmd.starts_with("\\auth add ") => {
                                         let pattern =

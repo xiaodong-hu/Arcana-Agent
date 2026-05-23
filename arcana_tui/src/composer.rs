@@ -13,10 +13,12 @@ pub const ALL_COMMANDS: &[&str] = &[
     "\\usage",
     "\\working_dir",
     "\\check",
-    "\\auth list",
+    "\\auth show",
     "\\auth add ",
     "\\auth remove ",
     "\\auth edit",
+    "\\config show",
+    "\\config edit",
 ];
 
 /// The input composer at the bottom of the screen.
@@ -667,12 +669,15 @@ fn slash_hint(input: &str) -> &'static str {
         "\\c" | "\\cl" | "\\cle" | "\\clea" | "\\clear" => " ← clear viewport",
         "\\s" | "\\st" | "\\sta" | "\\stat" | "\\statu" | "\\status" => " ← show status",
         "\\u" | "\\us" | "\\usa" | "\\usag" | "\\usage" => " ← session token/cost stats",
-        "\\au" | "\\aut" | "\\auth" => " list|add|remove|edit",
-        "\\auth l" | "\\auth li" | "\\auth lis" | "\\auth list" => " ← show authorized commands",
+        "\\au" | "\\aut" | "\\auth" => " show|add|remove|edit",
+        "\\auth s" | "\\auth sh" | "\\auth sho" | "\\auth show" => " ← show authority config",
         "\\auth a" | "\\auth ad" | "\\auth add" => " <command> ← add to allow list",
         "\\auth r" | "\\auth re" | "\\auth rem" | "\\auth remo" | "\\auth remov"
         | "\\auth remove" => " <command> ← remove from allow list",
         "\\auth e" | "\\auth ed" | "\\auth edi" | "\\auth edit" => " ← open in $EDITOR",
+        "\\co" | "\\con" | "\\conf" | "\\confi" | "\\config" => " show|edit",
+        "\\config s" | "\\config sh" | "\\config sho" | "\\config show" => " ← show config.toml",
+        "\\config e" | "\\config ed" | "\\config edi" | "\\config edit" => " ← open config.toml in $EDITOR",
         "\\w" | "\\wo" | "\\wor" | "\\work" | "\\worki" | "\\workin" | "\\working" => {
             " ← show working directory"
         }
@@ -686,7 +691,7 @@ fn slash_hint(input: &str) -> &'static str {
 
 /// Autocomplete a partial command. Returns the full command if unambiguous.
 fn autocomplete_slash(input: &str) -> Option<String> {
-    if input == "\\" || input == "\\auth " {
+    if input == "\\" || input == "\\auth " || input == "\\config " {
         return None; // too ambiguous
     }
     let matches: Vec<&&str> = ALL_COMMANDS
