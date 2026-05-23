@@ -54,7 +54,11 @@ async fn main() {
 
     // Enforce global workspace: if ~/.arcana is missing, prompt to create it.
     // This runs for EVERY launch except `onboard` (which creates it itself).
-    if !cli.command.as_ref().is_some_and(|c| matches!(c, Command::Onboard(_))) {
+    if !cli
+        .command
+        .as_ref()
+        .is_some_and(|c| matches!(c, Command::Onboard(_)))
+    {
         if !ensure_global_workspace() {
             process::exit(0);
         }
@@ -176,7 +180,10 @@ fn ensure_global_workspace() -> bool {
                 eprintln!("[Arcana] Failed to create {}: {}", global_dir.display(), e);
                 return false;
             }
-            eprintln!("[Arcana] Created system workspace at {}", global_dir.display());
+            eprintln!(
+                "[Arcana] Created system workspace at {}",
+                global_dir.display()
+            );
             true
         }
         _ => {
