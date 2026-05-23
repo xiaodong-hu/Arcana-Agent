@@ -45,6 +45,31 @@ Why Merged? Every mutable operation MUST be recorded. By placing recording insid
 | `fetch` | `url`, optional `tag` | `ok { path, bytes }` / `denied` |
 | `exec` | `cmd`, `args` | `ok { stdout, stderr, code }` / `denied` |
 | `register_tool` | `name`, `path`, `description` | `ok` / `denied` |
+| `prompt` | *(none)* | `{ content: "<markdown>" }` |
+
+
+### LLM Authority Prompt (`authorized_prompt.md`)
+
+The authority program **auto-generates** a project-level file `.arcana/authorized_prompt.md` that serves as the first-line context exposed to LLMs at the beginning of each session. This file:
+
+1. **Describes all available tools** with their exact JSON request format.
+2. **Lists current permissions** (allowed/denied write paths, read-deny rules, web domains, command whitelist).
+3. **Explains the IPC protocol** (unix socket, one JSON per line, one response per line).
+4. **Is regenerated** on server startup and whenever tools/permissions change at runtime (e.g., after `register_tool`).
+
+#### Generation
+
+- **On server startup:** The authority program writes `.arcana/authorized_prompt.md` before accepting connections.
+- **On hot-change:** After a successful `register_tool` or config reload, the file is regenerated.
+- **CLI access:** `authority_and_recording auth prompt [project_root]` prints the prompt to stdout and writes the file.
+- **IPC access:** `{"op": "prompt"}` returns the prompt content directly (not base64 — plain text).
+
+#### Usage by TUI
+
+The TUI (`arcana_tui`) reads `.arcana/authorized_prompt.md` and **mandatorily prepends** it to the system message at the start of each session. This ensures the LLM always knows:
+- What tools are available and how to invoke them.
+- What permissions it has (so it doesn't attempt denied operations).
+- That all operations go through the authority socket (not direct filesystem access).
 
 
 #### Config (`.arcana/access.toml`)

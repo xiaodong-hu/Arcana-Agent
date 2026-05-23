@@ -126,6 +126,26 @@ deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
 
 Runtime management: `\auth list|add|remove|edit`
 
+#### LLM Authority Instruction
+
+The authority program reads the human-maintained authority instruction and auto-generates `.arcana/authorized_prompt.md` as mandatory first-line LLM context. The instruction stays API-only; current filesystem, command, and network policy is exposed separately as a structured authority snapshot.
+
+Agents interact with authority by sending JSONL requests to the session authority socket:
+
+```bash
+# View the instruction text:
+arcana auth instruction
+```
+
+```json
+{"op":"instruction"}
+{"op":"list_authority"}
+{"op":"query","path":"README.md"}
+{"op":"fetch","url":"https://example.com","tag":null}
+```
+
+The generated prompt is refreshed on server startup and after runtime authority changes.
+
 ---
 
 ### 2. Hot-Plug Multilayer Skill Module System
@@ -431,9 +451,9 @@ Arcana-Agent/
 - [ ] **Skills daemon** — trigger-based skill loading, hot-reload, manifest parsing
 - [ ] **Memory system** — knowledge DB, semantic search, error patterns, session recall
 - [ ] **Embedding model download** — `arcana onboard` does not yet download `all-MiniLM-L6-v2.onnx`
-- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery
+- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery (prompt generation implemented)
 - [ ] **`arcana recover`** — restore project state from `git_record`
-- [ ] **Tool calls** — shell execution, file read/write, search, web fetch
+- [ ] **Tool calls** — shell execution, file read/write, search, web fetch (IPC protocol implemented)
 - [ ] **Diff review panel** — interactive accept/reject of file mutations
 - [ ] **OpenAI / Anthropic provider support** — only DeepSeek is wired up
 - [ ] **Context caching** — leveraging DeepSeek's prefix caching for long contexts

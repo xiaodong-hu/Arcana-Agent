@@ -1,5 +1,10 @@
-use ratatui::prelude::*;
 use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::prelude::*;
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::banner;
 use crate::cli::ResumeArgs;
@@ -108,19 +113,45 @@ impl App {
                 // Enter is handled in the event loop for LLM dispatch;
                 // this handles the case where composer is empty (no-op)
             }
-            KeyAction::Newline => { self.composer.insert_newline(); }
-            KeyAction::Tab => { self.composer.autocomplete_or_tab(); }
-            KeyAction::Backspace => { self.composer.backspace(); }
-            KeyAction::Delete => { self.composer.delete(); }
-            KeyAction::Left => { self.composer.move_left(); }
-            KeyAction::Right => { self.composer.move_right(); }
-            KeyAction::WordLeft => { self.composer.move_word_left(); }
-            KeyAction::WordRight => { self.composer.move_word_right(); }
-            KeyAction::DeleteWordLeft => { self.composer.delete_word_left(); }
-            KeyAction::JumpTop => { self.composer.jump_top(); }
-            KeyAction::JumpBottom => { self.composer.jump_bottom(); }
-            KeyAction::Home => { self.composer.move_home(); }
-            KeyAction::End => { self.composer.move_end(); }
+            KeyAction::Newline => {
+                self.composer.insert_newline();
+            }
+            KeyAction::Tab => {
+                self.composer.autocomplete_or_tab();
+            }
+            KeyAction::Backspace => {
+                self.composer.backspace();
+            }
+            KeyAction::Delete => {
+                self.composer.delete();
+            }
+            KeyAction::Left => {
+                self.composer.move_left();
+            }
+            KeyAction::Right => {
+                self.composer.move_right();
+            }
+            KeyAction::WordLeft => {
+                self.composer.move_word_left();
+            }
+            KeyAction::WordRight => {
+                self.composer.move_word_right();
+            }
+            KeyAction::DeleteWordLeft => {
+                self.composer.delete_word_left();
+            }
+            KeyAction::JumpTop => {
+                self.composer.jump_top();
+            }
+            KeyAction::JumpBottom => {
+                self.composer.jump_bottom();
+            }
+            KeyAction::Home => {
+                self.composer.move_home();
+            }
+            KeyAction::End => {
+                self.composer.move_end();
+            }
             KeyAction::Up => {
                 if self.composer.is_empty() || self.composer.history_index.is_some() {
                     self.composer.recall_previous();
@@ -131,12 +162,22 @@ impl App {
                     self.composer.recall_next();
                 }
             }
-            KeyAction::PageUp => { self.viewport.scroll_up(20); }
-            KeyAction::PageDown => { self.viewport.scroll_down(20); }
-            KeyAction::HalfPageUp => { self.viewport.scroll_up(10); }
-            KeyAction::HalfPageDown => { self.viewport.scroll_down(10); }
+            KeyAction::PageUp => {
+                self.viewport.scroll_up(20);
+            }
+            KeyAction::PageDown => {
+                self.viewport.scroll_down(20);
+            }
+            KeyAction::HalfPageUp => {
+                self.viewport.scroll_up(10);
+            }
+            KeyAction::HalfPageDown => {
+                self.viewport.scroll_down(10);
+            }
             KeyAction::Interrupt => {
-                if !self.composer.is_empty() { self.composer.clear(); }
+                if !self.composer.is_empty() {
+                    self.composer.clear();
+                }
             }
             KeyAction::BreakGeneration => {
                 // Stop LLM generation immediately
@@ -167,22 +208,51 @@ impl App {
             KeyAction::Expand => {
                 self.overlay.toggle_thinking();
             }
-            KeyAction::Char(c) => { self.overlay.composer.insert_char(c); }
-            KeyAction::Tab => { self.overlay.composer.autocomplete_or_tab(); }
-            KeyAction::Newline => { self.overlay.composer.insert_newline(); }
-            KeyAction::Backspace => { self.overlay.composer.backspace(); }
-            KeyAction::Delete => { self.overlay.composer.delete(); }
-            KeyAction::Left => { self.overlay.composer.move_left(); }
-            KeyAction::Right => { self.overlay.composer.move_right(); }
-            KeyAction::WordLeft => { self.overlay.composer.move_word_left(); }
-            KeyAction::WordRight => { self.overlay.composer.move_word_right(); }
-            KeyAction::DeleteWordLeft => { self.overlay.composer.delete_word_left(); }
-            KeyAction::Home => { self.overlay.composer.move_home(); }
-            KeyAction::End => { self.overlay.composer.move_end(); }
-            KeyAction::JumpTop => { self.overlay.composer.jump_top(); }
-            KeyAction::JumpBottom => { self.overlay.composer.jump_bottom(); }
+            KeyAction::Char(c) => {
+                self.overlay.composer.insert_char(c);
+            }
+            KeyAction::Tab => {
+                self.overlay.composer.autocomplete_or_tab();
+            }
+            KeyAction::Newline => {
+                self.overlay.composer.insert_newline();
+            }
+            KeyAction::Backspace => {
+                self.overlay.composer.backspace();
+            }
+            KeyAction::Delete => {
+                self.overlay.composer.delete();
+            }
+            KeyAction::Left => {
+                self.overlay.composer.move_left();
+            }
+            KeyAction::Right => {
+                self.overlay.composer.move_right();
+            }
+            KeyAction::WordLeft => {
+                self.overlay.composer.move_word_left();
+            }
+            KeyAction::WordRight => {
+                self.overlay.composer.move_word_right();
+            }
+            KeyAction::DeleteWordLeft => {
+                self.overlay.composer.delete_word_left();
+            }
+            KeyAction::Home => {
+                self.overlay.composer.move_home();
+            }
+            KeyAction::End => {
+                self.overlay.composer.move_end();
+            }
+            KeyAction::JumpTop => {
+                self.overlay.composer.jump_top();
+            }
+            KeyAction::JumpBottom => {
+                self.overlay.composer.jump_bottom();
+            }
             KeyAction::Up => {
-                if self.overlay.composer.is_empty() || self.overlay.composer.history_index.is_some() {
+                if self.overlay.composer.is_empty() || self.overlay.composer.history_index.is_some()
+                {
                     self.overlay.composer.recall_previous();
                 }
             }
@@ -191,9 +261,15 @@ impl App {
                     self.overlay.composer.recall_next();
                 }
             }
-            KeyAction::Interrupt => { self.overlay.composer.clear(); }
-            KeyAction::FocusDown => { self.overlay.scroll_down(3); }
-            KeyAction::FocusUp => { self.overlay.scroll_up(3); }
+            KeyAction::Interrupt => {
+                self.overlay.composer.clear();
+            }
+            KeyAction::FocusDown => {
+                self.overlay.scroll_down(3);
+            }
+            KeyAction::FocusUp => {
+                self.overlay.scroll_up(3);
+            }
             KeyAction::Enter => {} // handled in event loop
             _ => {}
         }
@@ -202,16 +278,24 @@ impl App {
     fn handle_llm_error(&mut self, err: LlmError) {
         let msg = format!("{}", err);
         let detail = match &err {
-            LlmError::RateLimit { retry_after_secs: Some(s), .. } => {
-                Some(format!("Will retry in {}s. Consider reducing request frequency.", s))
-            }
+            LlmError::RateLimit {
+                retry_after_secs: Some(s),
+                ..
+            } => Some(format!(
+                "Will retry in {}s. Consider reducing request frequency.",
+                s
+            )),
             LlmError::RateLimit { .. } => {
                 Some("Rate limit reached. Wait before sending more requests.".into())
             }
             _ => None,
         };
         // Show as error toast
-        self.toasts.push(Toast { message: msg, detail, created_at: chrono::Utc::now() });
+        self.toasts.push(Toast {
+            message: msg,
+            detail,
+            created_at: chrono::Utc::now(),
+        });
         // Also append to viewport as system error message
         self.viewport.add_error_message(format!("{}", err));
     }
@@ -220,10 +304,16 @@ impl App {
         let area = frame.area();
 
         let status_h = status_bar::status_bar_height(
-            &self.panel_state, &self.skills, &self.agents, &self.tasks,
+            &self.panel_state,
+            &self.skills,
+            &self.agents,
+            &self.tasks,
         );
         let task_panel_h = panels::task_panel_height(&self.panel_state, &self.tasks);
-        let composer_h = self.composer.height_for_width(area.width).min(area.height / 2);
+        let composer_h = self
+            .composer
+            .height_for_width(area.width)
+            .min(area.height / 2);
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -236,8 +326,14 @@ impl App {
             .split(area);
 
         status_bar::render_status_bar(
-            frame, chunks[0], &self.theme, &self.status,
-            &self.panel_state, &self.skills, &self.agents, &self.tasks,
+            frame,
+            chunks[0],
+            &self.theme,
+            &self.status,
+            &self.panel_state,
+            &self.skills,
+            &self.agents,
+            &self.tasks,
         );
 
         self.viewport.render(frame, chunks[1], &self.theme);
@@ -256,7 +352,8 @@ impl App {
 
 fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[Toast]) {
     let now = chrono::Utc::now();
-    let visible: Vec<&Toast> = toasts.iter()
+    let visible: Vec<&Toast> = toasts
+        .iter()
         .filter(|t| (now - t.created_at).num_seconds() < 5)
         .collect();
 
@@ -265,12 +362,17 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[Toast]) {
         let height: u16 = if toast.detail.is_some() { 3 } else { 2 };
         let x = area.width.saturating_sub(width + 2);
         let y = 1 + (i as u16 * (height + 1));
-        if y + height > area.height { break; }
+        if y + height > area.height {
+            break;
+        }
 
         let toast_area = Rect::new(x, y, width, height);
 
         // Use red border for error toasts (those containing "error" or "limit")
-        let border_color = if toast.message.contains("error") || toast.message.contains("limit") || toast.message.contains("Rate") {
+        let border_color = if toast.message.contains("error")
+            || toast.message.contains("limit")
+            || toast.message.contains("Rate")
+        {
             Color::Red
         } else {
             Color::Green
@@ -311,9 +413,8 @@ pub async fn interactive(
     let (mut event_tx, mut events, mut event_handle) = event::spawn_event_reader();
 
     // Conversation history for LLM context
-    let mut conversation: Vec<serde_json::Value> = vec![
-        serde_json::json!({"role": "system", "content": "You are a helpful assistant."})
-    ];
+    let mut conversation: Vec<serde_json::Value> =
+        vec![serde_json::json!({"role": "system", "content": system_prompt_with_authority()})];
 
     loop {
         tui.draw(|frame| app.render(frame))?;
@@ -331,14 +432,16 @@ pub async fn interactive(
                                 let trimmed = input.trim();
                                 let is_command = trimmed.starts_with('\\');
                                 match trimmed {
-                                    "\\quit" | "\\q" => { app.should_quit = true; }
+                                    "\\quit" | "\\q" => {
+                                        app.should_quit = true;
+                                    }
                                     "\\clear" => {
                                         app.viewport.messages.clear();
                                         conversation.truncate(1); // keep system msg
                                     }
                                     "\\help" => {
                                         app.viewport.add_error_message(
-"Commands:\n\
+                                            "Commands:\n\
   \\quit          Exit session\n\
   \\clear         Clear viewport\n\
   \\status        Show model/token info\n\
@@ -362,41 +465,54 @@ Hotkeys:\n\
   Home/End       Start/end of current line\n\
   Ctrl+b         Stop LLM generation\n\
   Ctrl+c         Clear prompt\n\
-  \\quit          Exit session".into()
+  \\quit          Exit session"
+                                                .into(),
                                         );
                                     }
                                     "\\status" => {
                                         app.viewport.add_error_message(format!(
                                             "Model: {} │ Tokens: {}/{} │ Tasks: {}",
-                                            app.status.model_name, app.status.tokens_used,
-                                            app.status.tokens_max, app.tasks.len()
+                                            app.status.model_name,
+                                            app.status.tokens_used,
+                                            app.status.tokens_max,
+                                            app.tasks.len()
                                         ));
                                     }
                                     "\\usage" => {
-                                        let in_str = format_token_count(app.status.session_input_tokens);
-                                        let out_str = format_token_count(app.status.session_output_tokens);
+                                        let in_str =
+                                            format_token_count(app.status.session_input_tokens);
+                                        let out_str =
+                                            format_token_count(app.status.session_output_tokens);
                                         app.viewport.add_error_message(format!(
                                             "Session Usage:\n  Requests: {}\n  Tokens: {} in / {} out\n  Total cost: {:.4}",
                                             app.status.session_requests, in_str, out_str, app.status.session_cost
                                         ));
                                     }
                                     "\\auth" | "\\auth list" => {
-                                        let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
+                                        let path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".arcana/authority.toml");
                                         if path.exists() {
                                             if let Ok(content) = std::fs::read_to_string(&path) {
                                                 app.viewport.add_error_message(format!(
-                                                    "Authority config: {}\n\n{}", path.display(), content
+                                                    "Authority config: {}\n\n{}",
+                                                    path.display(),
+                                                    content
                                                 ));
                                             }
                                         } else {
                                             app.viewport.add_error_message(
-                                                "No authority.toml found. Run: arcana onboard".into()
+                                                "No authority.toml found. Run: arcana onboard"
+                                                    .into(),
                                             );
                                         }
                                     }
                                     cmd if cmd.starts_with("\\auth add ") => {
-                                        let pattern = cmd.strip_prefix("\\auth add ").unwrap().trim();
-                                        let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
+                                        let pattern =
+                                            cmd.strip_prefix("\\auth add ").unwrap().trim();
+                                        let path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".arcana/authority.toml");
                                         if let Ok(content) = std::fs::read_to_string(&path) {
                                             // Simple append to [commands] allow list
                                             let new = content.replace(
@@ -404,29 +520,39 @@ Hotkeys:\n\
                                                 &format!("    \"{}\",\n]\n\n# Commands that always require confirmation", pattern)
                                             );
                                             let _ = std::fs::write(&path, &new);
-                                            app.viewport.add_error_message(format!("✓ Added to allow: {}", pattern));
+                                            app.viewport.add_error_message(format!(
+                                                "✓ Added to allow: {}",
+                                                pattern
+                                            ));
                                         }
                                     }
                                     cmd if cmd.starts_with("\\auth remove ") => {
-                                        let pattern = cmd.strip_prefix("\\auth remove ").unwrap().trim();
-                                        let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
+                                        let pattern =
+                                            cmd.strip_prefix("\\auth remove ").unwrap().trim();
+                                        let path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".arcana/authority.toml");
                                         if let Ok(content) = std::fs::read_to_string(&path) {
                                             let needle = format!("    \"{}\",\n", pattern);
                                             let new = content.replace(&needle, "");
                                             let _ = std::fs::write(&path, &new);
-                                            app.viewport.add_error_message(format!("✓ Removed: {}", pattern));
+                                            app.viewport.add_error_message(format!(
+                                                "✓ Removed: {}",
+                                                pattern
+                                            ));
                                         }
                                     }
                                     "\\auth edit" => {
-                                        let path = dirs::home_dir().unwrap_or_default().join(".arcana/authority.toml");
+                                        let path = dirs::home_dir()
+                                            .unwrap_or_default()
+                                            .join(".arcana/authority.toml");
                                         let editor = config.editor.command.clone();
                                         // Stop event reader completely before editor
                                         event_handle.abort();
                                         tui.suspend()?;
                                         // Run editor with full terminal control
-                                        let _ = std::process::Command::new(&editor)
-                                            .arg(&path)
-                                            .status();
+                                        let _ =
+                                            std::process::Command::new(&editor).arg(&path).status();
                                         // Resume TUI and respawn event reader
                                         tui.resume()?;
                                         let (tx, rx, handle) = event::spawn_event_reader();
@@ -434,29 +560,49 @@ Hotkeys:\n\
                                         events = rx;
                                         event_handle = handle;
                                         app.composer.clear();
-                                        app.viewport.add_error_message(
-                                            format!("Authority config reloaded from {}", path.display())
-                                        );
+                                        app.viewport.add_error_message(format!(
+                                            "Authority config reloaded from {}",
+                                            path.display()
+                                        ));
                                     }
                                     "\\check" => {
-                                        let home = dirs::home_dir().unwrap_or_default().join(".arcana");
+                                        let home =
+                                            dirs::home_dir().unwrap_or_default().join(".arcana");
                                         let mut lines = Vec::new();
                                         let cfg = home.join("config.toml");
-                                        lines.push(if cfg.exists() { "✓ config.toml" } else { "✗ config.toml (missing)" });
+                                        lines.push(if cfg.exists() {
+                                            "✓ config.toml"
+                                        } else {
+                                            "✗ config.toml (missing)"
+                                        });
                                         let auth = home.join("authority.toml");
-                                        lines.push(if auth.exists() { "✓ authority.toml" } else { "✗ authority.toml (missing)" });
+                                        lines.push(if auth.exists() {
+                                            "✓ authority.toml"
+                                        } else {
+                                            "✗ authority.toml (missing)"
+                                        });
                                         let soul = home.join("SOUL.md");
-                                        lines.push(if soul.exists() { "✓ SOUL.md" } else { "✗ SOUL.md (missing)" });
+                                        lines.push(if soul.exists() {
+                                            "✓ SOUL.md"
+                                        } else {
+                                            "✗ SOUL.md (missing)"
+                                        });
                                         let key_ok = std::env::var("DEEPSEEK_API_KEY").is_ok();
-                                        lines.push(if key_ok { "✓ DEEPSEEK_API_KEY (env)" } else { "✗ DEEPSEEK_API_KEY (not set)" });
-                                        app.viewport.add_error_message(
-                                            format!("Health Check:\n  {}", lines.join("\n  "))
-                                        );
+                                        lines.push(if key_ok {
+                                            "✓ DEEPSEEK_API_KEY (env)"
+                                        } else {
+                                            "✗ DEEPSEEK_API_KEY (not set)"
+                                        });
+                                        app.viewport.add_error_message(format!(
+                                            "Health Check:\n  {}",
+                                            lines.join("\n  ")
+                                        ));
                                     }
                                     _ if is_command => {
-                                        app.viewport.add_error_message(
-                                            format!("Unknown command: {}", trimmed)
-                                        );
+                                        app.viewport.add_error_message(format!(
+                                            "Unknown command: {}",
+                                            trimmed
+                                        ));
                                     }
                                     _ => {
                                         // Send to LLM
@@ -464,17 +610,31 @@ Hotkeys:\n\
                                         app.viewport.is_streaming = true;
                                         app.show_banner = false;
 
+                                        let authority_context =
+                                            authority_context_for_query(&input, &config).await;
+                                        let user_content = if authority_context.is_empty() {
+                                            input.clone()
+                                        } else {
+                                            format!("{authority_context}\n\nUser query:\n{input}")
+                                        };
+
                                         conversation.push(serde_json::json!({
-                                            "role": "user", "content": input
+                                            "role": "user", "content": user_content
                                         }));
 
                                         crate::llm::spawn_stream(
-                                            &config, conversation.clone(), event_tx.clone()
+                                            &config,
+                                            conversation.clone(),
+                                            event_tx.clone(),
                                         );
                                     }
                                 }
                                 // Add separator after command output
-                                if is_command && trimmed != "\\quit" && trimmed != "\\q" && trimmed != "\\clear" {
+                                if is_command
+                                    && trimmed != "\\quit"
+                                    && trimmed != "\\q"
+                                    && trimmed != "\\clear"
+                                {
                                     app.viewport.add_separator();
                                 }
                                 app.show_banner = false;
@@ -486,7 +646,11 @@ Hotkeys:\n\
                                 // Calculate line:col for cursor positioning
                                 let before = &app.composer.input[..app.composer.cursor_pos];
                                 let line = before.matches('\n').count() + 1;
-                                let col = before.rfind('\n').map(|i| app.composer.cursor_pos - i - 1).unwrap_or(app.composer.cursor_pos) + 1;
+                                let col = before
+                                    .rfind('\n')
+                                    .map(|i| app.composer.cursor_pos - i - 1)
+                                    .unwrap_or(app.composer.cursor_pos)
+                                    + 1;
                                 event_handle.abort();
                                 tui.suspend()?;
                                 let _ = std::process::Command::new(&editor)
@@ -526,9 +690,7 @@ Hotkeys:\n\
                                 app.overlay.is_streaming = true;
 
                                 let msgs = app.overlay.build_messages();
-                                crate::llm::spawn_overlay_stream(
-                                    &config, msgs, event_tx.clone()
-                                );
+                                crate::llm::spawn_overlay_stream(&config, msgs, event_tx.clone());
                             } else {
                                 app.handle_overlay_key(action);
                             }
@@ -550,8 +712,12 @@ Hotkeys:\n\
                     composer.show_hint = false;
                     app.show_banner = false;
                 }
-                AppEvent::ScrollUp(n) => { app.viewport.scroll_up(n as usize); }
-                AppEvent::ScrollDown(n) => { app.viewport.scroll_down(n as usize); }
+                AppEvent::ScrollUp(n) => {
+                    app.viewport.scroll_up(n as usize);
+                }
+                AppEvent::ScrollDown(n) => {
+                    app.viewport.scroll_down(n as usize);
+                }
                 AppEvent::Resize(_, _) => {}
                 AppEvent::Token(token) => {
                     // Thinking tokens are prefixed with \x00THINK:
@@ -561,13 +727,20 @@ Hotkeys:\n\
                         app.viewport.append_token(&token);
                     }
                 }
-                AppEvent::ThinkStart => { app.viewport.start_thinking(); }
-                AppEvent::ThinkEnd => { app.viewport.end_thinking(); }
+                AppEvent::ThinkStart => {
+                    app.viewport.start_thinking();
+                }
+                AppEvent::ThinkEnd => {
+                    app.viewport.end_thinking();
+                }
                 AppEvent::ResponseComplete(stats) => {
                     // Store the response in conversation history
                     let response_text = app.viewport.streaming_text.clone();
-                    let thinking_text = app.viewport.streaming_think
-                        .as_ref().map(|t| t.content.clone());
+                    let thinking_text = app
+                        .viewport
+                        .streaming_think
+                        .as_ref()
+                        .map(|t| t.content.clone());
 
                     // Update token usage in status
                     if let Some(s) = &stats {
@@ -591,13 +764,20 @@ Hotkeys:\n\
                     }
                     conversation.push(msg);
                 }
-                AppEvent::LlmError(err) => { app.handle_llm_error(err); }
+                AppEvent::LlmError(err) => {
+                    app.handle_llm_error(err);
+                }
                 AppEvent::Toast { message, detail } => {
-                    app.toasts.push(Toast { message, detail, created_at: chrono::Utc::now() });
+                    app.toasts.push(Toast {
+                        message,
+                        detail,
+                        created_at: chrono::Utc::now(),
+                    });
                 }
                 AppEvent::Tick => {
                     let now = chrono::Utc::now();
-                    app.toasts.retain(|t| (now - t.created_at).num_seconds() < 5);
+                    app.toasts
+                        .retain(|t| (now - t.created_at).num_seconds() < 5);
                 }
                 // Overlay (query agent) events
                 AppEvent::OverlayToken(token) => {
@@ -607,9 +787,15 @@ Hotkeys:\n\
                         app.overlay.append_token(&token);
                     }
                 }
-                AppEvent::OverlayThinkStart => { app.overlay.start_thinking(); }
-                AppEvent::OverlayThinkEnd => { app.overlay.end_thinking(); }
-                AppEvent::OverlayResponseComplete => { app.overlay.finalize_response(); }
+                AppEvent::OverlayThinkStart => {
+                    app.overlay.start_thinking();
+                }
+                AppEvent::OverlayThinkEnd => {
+                    app.overlay.end_thinking();
+                }
+                AppEvent::OverlayResponseComplete => {
+                    app.overlay.finalize_response();
+                }
                 AppEvent::OverlayError(msg) => {
                     app.overlay.is_streaming = false;
                     app.overlay.messages.push(Message {
@@ -624,7 +810,9 @@ Hotkeys:\n\
             }
         }
 
-        if app.should_quit { break; }
+        if app.should_quit {
+            break;
+        }
     }
 
     tui.restore()?;
@@ -647,24 +835,47 @@ pub async fn single_shot(
     println!();
 
     // Resolve API key (env var takes priority over literal "$VAR" in config)
-    let api_key = config.resolve_api_key(provider_name)
-        .ok_or_else(|| format!("No API key found for provider '{}'. Set the appropriate env var.", provider_name))?;
+    let api_key = config.resolve_api_key(provider_name).ok_or_else(|| {
+        format!(
+            "No API key found for provider '{}'. Set the appropriate env var.",
+            provider_name
+        )
+    })?;
 
     // Resolve base URL
     let base_url = match provider_name.as_str() {
         "deepseek" => {
             let url = &config.providers.deepseek.base_url;
-            if url.is_empty() { "https://api.deepseek.com".to_string() } else { url.clone() }
+            if url.is_empty() {
+                "https://api.deepseek.com".to_string()
+            } else {
+                url.clone()
+            }
         }
         "openai" => {
             let url = &config.providers.openai.base_url;
-            if url.is_empty() { "https://api.openai.com/v1".to_string() } else { url.clone() }
+            if url.is_empty() {
+                "https://api.openai.com/v1".to_string()
+            } else {
+                url.clone()
+            }
         }
         "anthropic" => {
             let url = &config.providers.anthropic.base_url;
-            if url.is_empty() { "https://api.anthropic.com".to_string() } else { url.clone() }
+            if url.is_empty() {
+                "https://api.anthropic.com".to_string()
+            } else {
+                url.clone()
+            }
         }
         _ => return Err(format!("Unsupported provider: {}", provider_name).into()),
+    };
+
+    let authority_context = authority_context_for_query(query, &config).await;
+    let user_content = if authority_context.is_empty() {
+        query.to_string()
+    } else {
+        format!("{authority_context}\n\nUser query:\n{query}")
     };
 
     // Build request body
@@ -672,8 +883,8 @@ pub async fn single_shot(
     let mut body = serde_json::json!({
         "model": model_name,
         "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": query}
+            {"role": "system", "content": system_prompt_with_authority()},
+            {"role": "user", "content": user_content}
         ],
         "stream": false
     });
@@ -719,6 +930,517 @@ pub async fn single_shot(
     }
 
     Ok(())
+}
+
+fn system_prompt_with_authority() -> String {
+    let base = "You are a helpful assistant.";
+    match fs::read_to_string(".arcana/authorized_prompt.md") {
+        Ok(prompt) => format!("{}\n\n{}", prompt.trim_end(), base),
+        Err(_) => base.to_string(),
+    }
+}
+
+async fn authority_context_for_query(query: &str, _config: &Config) -> String {
+    let urls = extract_urls(query);
+    if urls.is_empty() {
+        return String::new();
+    }
+
+    let socket_path = Path::new(".arcana/authority.sock");
+    let mut sections = Vec::new();
+    for url in urls {
+        // Try authority socket first; fall back to direct curl on any failure.
+        let result = if socket_path.exists() {
+            authority_url_context(socket_path, &url).await
+        } else {
+            Err("no authority socket".into())
+        };
+
+        match result {
+            Ok(Some(section)) => sections.push(section),
+            Ok(None) => {}
+            Err(auth_err) => {
+                // Authority failed — fall back to direct curl.
+                match direct_fetch_url(&url) {
+                    Ok(text) => {
+                        sections.push(format!("Source: {url}\n\n{text}"));
+                    }
+                    Err(curl_err) => {
+                        sections.push(format!(
+                            "Source: {url}\nFetch failed (authority: {auth_err}, direct: {curl_err})"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    if sections.is_empty() {
+        String::new()
+    } else {
+        format!("Authority-fetched context:\n\n{}", sections.join("\n\n"))
+    }
+}
+
+/// Fetch a URL via the authority daemon over its unix socket.
+async fn authority_url_context(
+    socket_path: &Path,
+    url: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let resp = authority_request(
+        socket_path,
+        serde_json::json!({"op": "fetch", "url": url, "tag": null}),
+    )?;
+
+    if resp["status"] == "denied" {
+        let reason = resp["reason"].as_str().unwrap_or("unknown reason");
+        return Ok(Some(format!(
+            "Source: {url}\nDenied by authority: {reason}"
+        )));
+    }
+
+    if resp["status"] != "fetched" {
+        return Ok(None);
+    }
+
+    let Some(path) = resp["path"].as_str() else {
+        return Ok(None);
+    };
+
+    let bytes = fs::read(PathBuf::from(path))?;
+    let text = if looks_like_pdf(&bytes) {
+        format!("[PDF fetched: {} bytes]", bytes.len())
+    } else {
+        clean_html_for_llm(&String::from_utf8_lossy(&bytes))
+    };
+
+    Ok(Some(format!("Source: {url}\n\n{text}")))
+}
+
+/// Direct curl fetch — used when the authority daemon is not reachable.
+/// Caches pages under `.arcana/web_cache/` the same way the authority daemon does.
+fn direct_fetch_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // Ensure cache directory exists
+    let cache_dir = PathBuf::from(".arcana/web_cache/pages");
+    fs::create_dir_all(&cache_dir)?;
+
+    // Simple deterministic hash of URL for cache filename (djb2)
+    let url_hash = {
+        let mut h: u64 = 5381;
+        for b in url.bytes() {
+            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        }
+        format!("{:016x}", h)
+    };
+    let cache_file = cache_dir.join(&url_hash);
+
+    // Fetch if not cached
+    if !cache_file.exists() {
+        let status = Command::new("curl")
+            .args([
+                "-sL", "--max-time", "30",
+                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "-H", "Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
+                "-o",
+            ])
+            .arg(&cache_file)
+            .arg(url)
+            .status()?;
+
+        if !status.success() {
+            let _ = fs::remove_file(&cache_file);
+            return Err(format!("curl exited with {}", status).into());
+        }
+
+        // Append to index
+        let index_path = PathBuf::from(".arcana/web_cache/index.jsonl");
+        let mut idx = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&index_path)?;
+        writeln!(idx, "{{\"url\":\"{}\",\"file\":\"{}\"}}", url, url_hash)?;
+    }
+
+    let bytes = fs::read(&cache_file)?;
+    if looks_like_pdf(&bytes) {
+        Ok(format!("[PDF fetched: {} bytes]", bytes.len()))
+    } else {
+        Ok(clean_html_for_llm(&String::from_utf8_lossy(&bytes)))
+    }
+}
+
+/// Clean raw HTML before throwing it into the LLM conversation.
+///
+/// Strategy:
+/// 1. Remove entire blocks that are never meaningful: script, style, noscript, svg,
+///    nav, footer, header, aside, iframe, form, template, link, meta.
+/// 2. Remove HTML comments.
+/// 3. Extract \<title\> and meta-description as a header.
+/// 4. Strip all remaining tags, collapse whitespace, decode entities.
+/// 5. Remove very short lines that look like navigation boilerplate.
+/// 6. Truncate to a generous cap to avoid blowing up the context window.
+fn clean_html_for_llm(raw: &str) -> String {
+    let mut html = raw.to_string();
+
+    // --- Step 1: remove whole-tag blocks that carry zero meaning ---
+    for (start, end) in &[
+        ("<script", "</script>"),
+        ("<style", "</style>"),
+        ("<noscript", "</noscript>"),
+        ("<svg", "</svg>"),
+        ("<nav", "</nav>"),
+        ("<footer", "</footer>"),
+        ("<header", "</header>"),
+        ("<aside", "</aside>"),
+        ("<iframe", "</iframe>"),
+        ("<form", "</form>"),
+        ("<template", "</template>"),
+    ] {
+        html = remove_html_block(&html, start, end);
+    }
+
+    // Remove self-closing / single tags that are pure metadata or styling
+    for tag in &[
+        "<link ", "<meta ", "<base ", "<input ", "<br ", "<hr ", "<img ", "<source ",
+    ] {
+        html = remove_self_closing_tags(&html, tag);
+    }
+
+    // --- Step 2: remove HTML comments ---
+    html = remove_html_comments(&html);
+
+    // --- Step 3: extract useful metadata before stripping tags ---
+    let metadata = extract_page_metadata(&html);
+
+    // --- Step 4: strip all remaining HTML tags, collapse whitespace ---
+    let body_text = strip_tags_collapse_whitespace(&html);
+
+    // --- Step 5: remove likely-navigation lines ---
+    let cleaned_body = filter_noise_lines(&body_text);
+
+    // --- Step 6: decode entities ---
+    let decoded = decode_html_entities(&cleaned_body);
+
+    // --- Step 7: truncate to a generous cap ---
+    let capped = truncate_chars(&decoded, 80_000);
+
+    // --- Assemble: metadata header + body ---
+    if metadata.is_empty() {
+        capped
+    } else {
+        format!("{metadata}\n\n{capped}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HTML cleaning helpers
+// ---------------------------------------------------------------------------
+
+/// Remove blocks delimited by start_pat … end_pat (case‑insensitive).
+fn remove_html_block(input: &str, start_pat: &str, end_pat: &str) -> String {
+    let mut out = input.to_string();
+    loop {
+        let lower = out.to_lowercase();
+        let Some(start) = lower.find(&start_pat.to_lowercase()) else {
+            break;
+        };
+        let Some(end_rel) = lower[start..].find(&end_pat.to_lowercase()) else {
+            out.replace_range(start.., " ");
+            break;
+        };
+        let end = start + end_rel + end_pat.len();
+        out.replace_range(start..end, " ");
+    }
+    out
+}
+
+/// Remove self‑closing / void tags like `<link ...>`, `<meta ...>`, `<br>`, etc.
+fn remove_self_closing_tags(input: &str, tag_start: &str) -> String {
+    let mut out = input.to_string();
+    let tag_lower = tag_start.to_lowercase();
+    loop {
+        let lower = out.to_lowercase();
+        let Some(pos) = lower.find(&tag_lower) else {
+            break;
+        };
+        // Find the closing >
+        let rest = &lower[pos + tag_lower.len()..];
+        let Some(end_off) = rest.find('>') else { break };
+        out.replace_range(pos..pos + tag_lower.len() + end_off + 1, " ");
+    }
+    out
+}
+
+/// Remove `<!-- ... -->` comments.
+fn remove_html_comments(input: &str) -> String {
+    let mut out = input.to_string();
+    loop {
+        let Some(start) = out.find("<!--") else { break };
+        let Some(end_rel) = out[start..].find("-->") else {
+            break;
+        };
+        out.replace_range(start..start + end_rel + 3, " ");
+    }
+    out
+}
+
+/// Pull out \<title\> and common meta descriptions before tag‑stripping.
+fn extract_page_metadata(html: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // <title>
+    if let Some(raw) = extract_between_case_insensitive(html, "<title", "</title>") {
+        let text = raw.split_once('>').map(|(_, v)| v).unwrap_or(&raw);
+        let text = decode_html_entities(text.trim());
+        if !text.is_empty() {
+            parts.push(format!("Title: {text}"));
+        }
+    }
+
+    // <meta name="description" ...> and og:title/description
+    let lower = html.to_lowercase();
+    let mut search_from = 0;
+    while let Some(idx) = lower[search_from..].find("<meta") {
+        let start = search_from + idx;
+        let Some(end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end_rel + 1;
+        let tag = &html[start..end];
+        let tag_lower = &lower[start..end];
+        if (tag_lower.contains("name=\"description\"")
+            || tag_lower.contains("name='description'")
+            || tag_lower.contains("property=\"og:title\"")
+            || tag_lower.contains("property='og:title'")
+            || tag_lower.contains("property=\"og:description\"")
+            || tag_lower.contains("property='og:description'"))
+            && let Some(content) = extract_attr(tag, "content")
+        {
+            let content = decode_html_entities(content.trim());
+            if !content.is_empty() {
+                parts.push(content);
+            }
+        }
+        search_from = end;
+    }
+
+    parts.join("\n")
+}
+
+/// Find text between two case‑insensitive patterns.
+fn extract_between_case_insensitive(input: &str, start_pat: &str, end_pat: &str) -> Option<String> {
+    let lower = input.to_lowercase();
+    let start = lower.find(&start_pat.to_lowercase())?;
+    let end_rel = lower[start..].find(&end_pat.to_lowercase())?;
+    Some(input[start..start + end_rel].to_string())
+}
+
+/// Extract the value of an HTML attribute (e.g. `content="…"`).
+fn extract_attr(tag: &str, attr: &str) -> Option<String> {
+    let lower = tag.to_lowercase();
+    let needle = format!("{attr}=");
+    let idx = lower.find(&needle)?;
+    let rest = &tag[idx + needle.len()..];
+    let quote = rest.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let value_start = quote.len_utf8();
+    let value_end = rest[value_start..].find(quote)?;
+    Some(rest[value_start..value_start + value_end].to_string())
+}
+
+/// Strip all HTML tags: replace `<...>` with a space, then collapse runs of whitespace.
+fn strip_tags_collapse_whitespace(input: &str) -> String {
+    let mut out = String::with_capacity(input.len().min(64_000));
+    let mut in_tag = false;
+    let mut last_was_space = false;
+    let mut last_was_newline = false;
+
+    for ch in input.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+                // Emit a space before a tag if we're in text (prevents word‑gluing)
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+            }
+            '>' => {
+                in_tag = false;
+            }
+            _ if in_tag => {}
+            '\n' | '\r' => {
+                if !last_was_newline {
+                    out.push('\n');
+                    last_was_newline = true;
+                }
+                last_was_space = true;
+            }
+            c if c.is_whitespace() => {
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+                last_was_newline = false;
+            }
+            c => {
+                out.push(c);
+                last_was_space = false;
+                last_was_newline = false;
+            }
+        }
+    }
+    out
+}
+
+/// Remove lines that look like navigation / footer / cookie‑banner boilerplate.
+///
+/// A line is considered noise when:
+/// - it is ≤ 3 "words" (separated by whitespace) and ≤ 60 characters, AND
+/// - it matches common boilerplate patterns.
+fn filter_noise_lines(text: &str) -> String {
+    let noise_patterns = &[
+        "cookie",
+        "privacy policy",
+        "terms of service",
+        "terms of use",
+        "sign in",
+        "log in",
+        "login",
+        "sign up",
+        "register",
+        "subscribe",
+        "contact us",
+        "about us",
+        "help center",
+        "faq",
+        "accessibility",
+        "all rights reserved",
+        "copyright ©",
+        "copyright 20",
+        "powered by",
+        "follow us",
+        "share this",
+        "print page",
+        "back to top",
+        "scroll to top",
+        "skip to content",
+        "skip to main",
+        "toggle navigation",
+        "open menu",
+        "close menu",
+        "main menu",
+        "home page",
+        "site map",
+        "rss feed",
+        "atom feed",
+        "advertisement",
+        "sponsored",
+        "related articles",
+        "you might also like",
+        "recommended for you",
+        "leave a comment",
+        "add comment",
+        "reply",
+        "previous page",
+        "next page",
+        "page 1 of",
+        "this site uses cookies",
+        "we use cookies",
+        "accept cookies",
+        "cookie settings",
+        "manage cookies",
+    ];
+
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            out.push('\n');
+            continue;
+        }
+        let word_count = trimmed.split_whitespace().count();
+        let is_short = word_count <= 3 && trimmed.len() <= 60;
+        if is_short {
+            let lower = trimmed.to_lowercase();
+            if noise_patterns.iter().any(|p| lower.contains(p)) {
+                continue; // skip this line
+            }
+        }
+        out.push_str(trimmed);
+        out.push('\n');
+    }
+    out
+}
+
+/// Decode common HTML entities.
+fn decode_html_entities(text: &str) -> String {
+    text.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&#x27;", "'")
+        .replace("&apos;", "'")
+        .replace("&nbsp;", " ")
+        .replace("&mdash;", "—")
+        .replace("&ndash;", "–")
+        .replace("&ldquo;", "\u{201c}")
+        .replace("&rdquo;", "\u{201d}")
+        .replace("&lsquo;", "\u{2018}")
+        .replace("&rsquo;", "\u{2019}")
+        .replace("&hellip;", "…")
+        .replace("&copy;", "©")
+        .replace("&reg;", "®")
+        .replace("&trade;", "™")
+}
+
+fn authority_request(
+    socket_path: &Path,
+    req: serde_json::Value,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut stream = UnixStream::connect(socket_path)?;
+    writeln!(stream, "{}", req)?;
+    stream.flush()?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    Ok(serde_json::from_str(line.trim())?)
+}
+
+fn extract_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for token in text.split_whitespace() {
+        let url = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | '<' | '>' | ')' | '(' | ',' | '.' | '?' | '!' | ';' | ':'
+            )
+        });
+        if (url.starts_with("https://") || url.starts_with("http://"))
+            && !urls.iter().any(|u| u == url)
+        {
+            urls.push(url.to_string());
+        }
+    }
+    urls
+}
+
+fn looks_like_pdf(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF")
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max_chars).collect();
+    out.push_str("\n[truncated]");
+    out
 }
 
 /// Resume a previous session.
