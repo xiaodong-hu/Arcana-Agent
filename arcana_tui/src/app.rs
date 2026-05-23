@@ -38,6 +38,8 @@ struct App {
     generation_broken: bool,
     /// When the current LLM stream started (for break-generation timing).
     stream_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Handle to the currently running LLM stream task (aborted on Ctrl+B).
+    stream_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl App {
@@ -64,6 +66,7 @@ impl App {
             should_quit: false,
             generation_broken: false,
             stream_started_at: None,
+            stream_handle: None,
         }
     }
 
@@ -190,10 +193,13 @@ impl App {
                 }
             }
             KeyAction::BreakGeneration => {
-                // Stop LLM generation immediately — flag it, ignore remaining tokens.
+                // Stop LLM generation immediately — abort the tokio task.
                 if self.viewport.is_streaming {
                     self.viewport.is_streaming = false;
                     self.generation_broken = true;
+                    if let Some(handle) = self.stream_handle.take() {
+                        handle.abort();
+                    }
                 }
             }
             KeyAction::Freeze => {
@@ -280,6 +286,9 @@ impl App {
                 if self.overlay.is_streaming {
                     self.overlay.is_streaming = false;
                     self.generation_broken = true;
+                    if let Some(handle) = self.stream_handle.take() {
+                        handle.abort();
+                    }
                 }
             }
             KeyAction::FocusDown => {
@@ -683,11 +692,15 @@ Hotkeys:\n\
                                             "role": "user", "content": user_content
                                         }));
 
-                                        crate::llm::spawn_stream(
+                                        // Abort any prior stream (defensive) and store the new handle.
+                                        if let Some(old) = app.stream_handle.take() {
+                                            old.abort();
+                                        }
+                                        app.stream_handle = Some(crate::llm::spawn_stream(
                                             &config,
                                             conversation.clone(),
                                             event_tx.clone(),
-                                        );
+                                        ));
                                     }
                                 }
                                 // Add separator after command output
@@ -753,7 +766,14 @@ Hotkeys:\n\
                                 app.stream_started_at = Some(chrono::Utc::now());
 
                                 let msgs = app.overlay.build_messages();
-                                crate::llm::spawn_overlay_stream(&config, msgs, event_tx.clone());
+                                if let Some(old) = app.stream_handle.take() {
+                                    old.abort();
+                                }
+                                app.stream_handle = Some(crate::llm::spawn_overlay_stream(
+                                    &config,
+                                    msgs,
+                                    event_tx.clone(),
+                                ));
                             } else {
                                 app.handle_overlay_key(action);
                             }
@@ -826,6 +846,7 @@ Hotkeys:\n\
                         app.viewport.add_separator();
                         app.generation_broken = false;
                         app.stream_started_at = None;
+                        app.stream_handle = None;
                         continue;
                     }
 
@@ -858,8 +879,10 @@ Hotkeys:\n\
                         msg["reasoning_content"] = serde_json::json!(thinking);
                     }
                     conversation.push(msg);
+                    app.stream_handle = None;
                 }
                 AppEvent::LlmError(err) => {
+                    app.stream_handle = None;
                     app.handle_llm_error(err);
                 }
                 AppEvent::Toast { message, detail } => {
@@ -915,12 +938,15 @@ Hotkeys:\n\
                         });
                         app.generation_broken = false;
                         app.stream_started_at = None;
+                        app.stream_handle = None;
                         app.overlay.is_streaming = false;
                         continue;
                     }
                     app.overlay.finalize_response();
+                    app.stream_handle = None;
                 }
                 AppEvent::OverlayError(msg) => {
+                    app.stream_handle = None;
                     app.overlay.is_streaming = false;
                     app.overlay.messages.push(Message {
                         role: MessageRole::System,

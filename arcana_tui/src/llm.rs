@@ -8,11 +8,12 @@ use crate::event::AppEvent;
 use crate::types::ResponseStats;
 
 /// Spawn a streaming LLM request for the main agent.
+/// Returns the JoinHandle so the caller can abort it on Ctrl+B.
 pub fn spawn_stream(
     config: &Config,
     messages: Vec<serde_json::Value>,
     tx: mpsc::UnboundedSender<AppEvent>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let provider = config.agents.main.provider.clone();
     let model = config.agents.main.model.clone();
     let thinking = config.agents.main.thinking.clone();
@@ -20,20 +21,25 @@ pub fn spawn_stream(
     let base_url = resolve_base_url(config, &provider);
 
     tokio::spawn(async move {
-        if let Err(e) = do_stream(&base_url, &api_key, &model, &thinking, &messages, &tx, false).await {
+        if let Err(e) = do_stream(
+            &base_url, &api_key, &model, &thinking, &messages, &tx, false,
+        )
+        .await
+        {
             let _ = tx.send(AppEvent::LlmError(crate::types::LlmError::NetworkError {
                 message: e.to_string(),
             }));
         }
-    });
+    })
 }
 
 /// Spawn a streaming LLM request for the query overlay agent.
+/// Returns the JoinHandle so the caller can abort it on Ctrl+B.
 pub fn spawn_overlay_stream(
     config: &Config,
     messages: Vec<serde_json::Value>,
     tx: mpsc::UnboundedSender<AppEvent>,
-) {
+) -> tokio::task::JoinHandle<()> {
     let provider = config.agents.query.provider.clone();
     let model = config.agents.query.model.clone();
     let thinking = config.agents.query.thinking.clone();
@@ -41,17 +47,23 @@ pub fn spawn_overlay_stream(
     let base_url = resolve_base_url(config, &provider);
 
     tokio::spawn(async move {
-        if let Err(e) = do_stream(&base_url, &api_key, &model, &thinking, &messages, &tx, true).await {
+        if let Err(e) =
+            do_stream(&base_url, &api_key, &model, &thinking, &messages, &tx, true).await
+        {
             let _ = tx.send(AppEvent::OverlayError(e.to_string()));
         }
-    });
+    })
 }
 
 fn resolve_base_url(config: &Config, provider: &str) -> String {
     match provider {
         "deepseek" => {
             let url = &config.providers.deepseek.base_url;
-            if url.is_empty() { "https://api.deepseek.com".to_string() } else { url.clone() }
+            if url.is_empty() {
+                "https://api.deepseek.com".to_string()
+            } else {
+                url.clone()
+            }
         }
         _ => "https://api.deepseek.com".to_string(),
     }
@@ -106,7 +118,9 @@ async fn do_stream(
             let line = buffer[..line_end].trim_end_matches('\r').to_string();
             buffer = buffer[line_end + 1..].to_string();
 
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             if line == "data: [DONE]" {
                 if is_overlay {
                     let _ = tx.send(AppEvent::OverlayResponseComplete);
@@ -178,7 +192,11 @@ async fn do_stream(
     }
 
     if in_thinking {
-        let _ = tx.send(if is_overlay { AppEvent::OverlayThinkEnd } else { AppEvent::ThinkEnd });
+        let _ = tx.send(if is_overlay {
+            AppEvent::OverlayThinkEnd
+        } else {
+            AppEvent::ThinkEnd
+        });
     }
     if is_overlay {
         let _ = tx.send(AppEvent::OverlayResponseComplete);
