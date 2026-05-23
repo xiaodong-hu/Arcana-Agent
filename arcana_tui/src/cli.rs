@@ -23,9 +23,18 @@ pub struct Cli {
     #[arg(long)]
     pub accessible: bool,
 
-    /// Reset all settings (removes ~/.arcana and recreates it)
+    /// Reset project workspace `./.arcana/` (requires confirmation).
+    /// Combine with `--factory` to reset the global `~/.arcana/` instead.
     #[arg(long)]
     pub reset: bool,
+
+    /// Target the global `~/.arcana/` directory for `--reset`
+    /// (requires extra warning confirmation).
+    #[arg(long)]
+    pub factory: bool,
+
+    /// Project root directory (defaults to current directory with confirmation)
+    pub project: Option<PathBuf>,
 
     #[command(subcommand)]
     pub command: Option<Command>,

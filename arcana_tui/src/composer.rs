@@ -4,6 +4,21 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 
+/// The master list of all system slash commands.
+pub const ALL_COMMANDS: &[&str] = &[
+    "\\quit",
+    "\\help",
+    "\\clear",
+    "\\status",
+    "\\usage",
+    "\\working_dir",
+    "\\check",
+    "\\auth list",
+    "\\auth add ",
+    "\\auth remove ",
+    "\\auth edit",
+];
+
 /// The input composer at the bottom of the screen.
 #[derive(Debug)]
 pub struct Composer {
@@ -21,6 +36,10 @@ pub struct Composer {
     pub overlay_mode: bool,
     /// Whether the first-use hint should be shown
     pub show_hint: bool,
+    /// Whether command selection mode is active (browsing with ↑↓)
+    pub selection_mode: bool,
+    /// Index into ALL_COMMANDS for the currently highlighted command
+    pub selection_index: usize,
 }
 
 impl Default for Composer {
@@ -33,6 +52,8 @@ impl Default for Composer {
             saved_input: String::new(),
             overlay_mode: false,
             show_hint: true,
+            selection_mode: false,
+            selection_index: 0,
         }
     }
 }
@@ -59,6 +80,9 @@ impl Composer {
 
     /// Try to autocomplete a slash command; if not applicable, insert tab.
     pub fn autocomplete_or_tab(&mut self) {
+        if self.selection_mode {
+            return; // no tab in selection mode
+        }
         if self.input.starts_with('\\') && !self.input.contains('\n') {
             if let Some(completed) = autocomplete_slash(&self.input) {
                 self.input = completed;
@@ -159,13 +183,19 @@ impl Composer {
     /// Delete word to the left of cursor (Ctrl+w).
     pub fn delete_word_left(&mut self) {
         self.history_index = None;
-        if self.cursor_pos == 0 { return; }
+        if self.cursor_pos == 0 {
+            return;
+        }
         let bytes = self.input.as_bytes();
         let mut pos = self.cursor_pos;
         // Skip whitespace backwards
-        while pos > 0 && bytes[pos - 1].is_ascii_whitespace() { pos -= 1; }
+        while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
         // Skip word chars backwards
-        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() { pos -= 1; }
+        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
         self.input.drain(pos..self.cursor_pos);
         self.cursor_pos = pos;
     }
@@ -173,13 +203,19 @@ impl Composer {
     /// Move cursor left by one word.
     pub fn move_word_left(&mut self) {
         self.history_index = None;
-        if self.cursor_pos == 0 { return; }
+        if self.cursor_pos == 0 {
+            return;
+        }
         // Skip whitespace backwards
         let bytes = self.input.as_bytes();
         let mut pos = self.cursor_pos;
-        while pos > 0 && bytes[pos - 1].is_ascii_whitespace() { pos -= 1; }
+        while pos > 0 && bytes[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
         // Skip word chars backwards
-        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() { pos -= 1; }
+        while pos > 0 && !bytes[pos - 1].is_ascii_whitespace() {
+            pos -= 1;
+        }
         self.cursor_pos = pos;
     }
 
@@ -187,13 +223,19 @@ impl Composer {
     pub fn move_word_right(&mut self) {
         self.history_index = None;
         let len = self.input.len();
-        if self.cursor_pos >= len { return; }
+        if self.cursor_pos >= len {
+            return;
+        }
         let bytes = self.input.as_bytes();
         let mut pos = self.cursor_pos;
         // Skip current word chars
-        while pos < len && !bytes[pos].is_ascii_whitespace() { pos += 1; }
+        while pos < len && !bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
         // Skip whitespace
-        while pos < len && bytes[pos].is_ascii_whitespace() { pos += 1; }
+        while pos < len && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
         self.cursor_pos = pos;
     }
 
@@ -206,7 +248,10 @@ impl Composer {
         }
         let col = self.cursor_pos - cur_line_start;
         // Find previous line start
-        let prev_line_start = self.input[..cur_line_start - 1].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let prev_line_start = self.input[..cur_line_start - 1]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
         let prev_line_len = cur_line_start - 1 - prev_line_start;
         self.cursor_pos = prev_line_start + col.min(prev_line_len);
         true
@@ -221,7 +266,8 @@ impl Composer {
         // Find next newline
         if let Some(nl) = after.find('\n') {
             let next_line_start = self.cursor_pos + nl + 1;
-            let next_line_end = self.input[next_line_start..].find('\n')
+            let next_line_end = self.input[next_line_start..]
+                .find('\n')
                 .map(|i| next_line_start + i)
                 .unwrap_or(self.input.len());
             let next_line_len = next_line_end - next_line_start;
@@ -248,11 +294,65 @@ impl Composer {
         self.input.clear();
         self.cursor_pos = 0;
         self.history_index = None;
+        self.selection_mode = false;
+    }
+
+    // ------------------------------------------------------------------
+    // Command selection mode (↑↓ browse, Esc exit, Enter fill)
+    // ------------------------------------------------------------------
+
+    /// Try to enter selection mode. Only valid when input is exactly `\`.
+    pub fn maybe_enter_selection_mode(&mut self) {
+        if !self.overlay_mode && self.input == "\\" {
+            self.selection_mode = true;
+            self.selection_index = 0;
+        }
+    }
+
+    /// Exit selection mode, keeping `\` in the input for further typing.
+    pub fn exit_selection_mode(&mut self) {
+        self.selection_mode = false;
+        self.input = "\\".to_string();
+        self.cursor_pos = 1;
+    }
+
+    /// Move selection cursor up (wraps around).
+    pub fn select_prev(&mut self) {
+        if self.selection_index == 0 {
+            self.selection_index = ALL_COMMANDS.len().saturating_sub(1);
+        } else {
+            self.selection_index -= 1;
+        }
+    }
+
+    /// Move selection cursor down (wraps around).
+    pub fn select_next(&mut self) {
+        if self.selection_index + 1 >= ALL_COMMANDS.len() {
+            self.selection_index = 0;
+        } else {
+            self.selection_index += 1;
+        }
+    }
+
+    /// Fill the composer with the selected command and exit selection mode.
+    pub fn fill_selected_command(&mut self) {
+        if let Some(cmd) = ALL_COMMANDS.get(self.selection_index) {
+            self.input = cmd.to_string();
+            self.cursor_pos = self.input.len();
+        }
+        self.selection_mode = false;
+    }
+
+    /// Whether selection mode is active.
+    pub fn is_in_selection_mode(&self) -> bool {
+        self.selection_mode && !self.overlay_mode
     }
 
     /// Recall previous message from history (Up key).
     pub fn recall_previous(&mut self) {
-        if self.history.is_empty() { return; }
+        if self.history.is_empty() {
+            return;
+        }
         if self.history_index.is_none() {
             // Save current input before first recall
             self.saved_input = self.input.clone();
@@ -292,23 +392,40 @@ impl Composer {
 
     /// Get the number of lines in the input.
     pub fn line_count(&self) -> usize {
-        if self.input.is_empty() { 1 } else { self.input.split('\n').count() }
+        if self.input.is_empty() {
+            1
+        } else {
+            self.input.split('\n').count()
+        }
     }
 
     /// Calculate the height needed for the composer, accounting for word wrap.
     pub fn height_for_width(&self, width: u16) -> u16 {
-        let max_lines = 10u16; // will be clamped by caller to half window
+        let max_lines = 10u16;
         let prompt_w = 2u16;
         let avail_w = width.saturating_sub(prompt_w).max(1) as usize;
-        let display = if !self.overlay_mode && self.input.starts_with('\\') { &self.input[1..] } else { &self.input };
-        let logical_lines: Vec<&str> = if display.is_empty() { vec![""] } else { display.split('\n').collect() };
+        let display = if !self.overlay_mode && self.input.starts_with('\\') {
+            &self.input[1..]
+        } else {
+            &self.input
+        };
+        let logical_lines: Vec<&str> = if display.is_empty() {
+            vec![""]
+        } else {
+            display.split('\n').collect()
+        };
         let mut visual_lines: u16 = 0;
         for line in &logical_lines {
             let w = UnicodeWidthStr::width(*line);
             visual_lines += ((w / avail_w) + 1) as u16;
         }
-        let hint_lines: u16 = if !self.overlay_mode && self.input == "\\" { 11 } else { 0 };
-        visual_lines.min(max_lines) + 1 + hint_lines // +1 for top border
+        // Command list shown when input is exactly "\" (with or without selection mode)
+        let cmd_list_lines: u16 = if !self.overlay_mode && self.input == "\\" {
+            ALL_COMMANDS.len() as u16 + 1 // +1 for the blank separator line
+        } else {
+            0
+        };
+        visual_lines.min(max_lines) + 1 + cmd_list_lines // +1 for top border
     }
 
     /// Fallback height (no width info).
@@ -351,14 +468,20 @@ impl Composer {
             return;
         }
 
-        let display_text = if in_slash_mode { &self.input[1..] } else { &self.input };
+        let display_text = if in_slash_mode {
+            &self.input[1..]
+        } else {
+            &self.input
+        };
         let content_style = if in_slash_mode {
             Style::default().fg(Color::Cyan)
         } else {
             Style::default().fg(Color::White)
         };
         let prompt_style = if in_slash_mode {
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             theme.prompt_glyph
         };
@@ -367,7 +490,11 @@ impl Composer {
         let avail_w = avail_w.max(1);
 
         // Split into logical lines, then wrap each into visual lines
-        let logical_lines: Vec<&str> = if display_text.is_empty() { vec![""] } else { display_text.split('\n').collect() };
+        let logical_lines: Vec<&str> = if display_text.is_empty() {
+            vec![""]
+        } else {
+            display_text.split('\n').collect()
+        };
 
         let mut visual_lines: Vec<Line> = Vec::new();
         let mut cursor_visual_y: u16 = 0;
@@ -385,7 +512,11 @@ impl Composer {
 
         for (line_idx, logical_line) in logical_lines.iter().enumerate() {
             let line_prefix = if line_idx == 0 { prompt } else { "  " };
-            let line_prefix_style = if line_idx == 0 { prompt_style } else { Style::default() };
+            let line_prefix_style = if line_idx == 0 {
+                prompt_style
+            } else {
+                Style::default()
+            };
 
             // Wrap this logical line into chunks of avail_w characters
             let mut remaining = *logical_line;
@@ -400,7 +531,10 @@ impl Composer {
                     let mut w = 0;
                     for (i, ch) in remaining.char_indices() {
                         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                        if w + cw > avail_w { byte_pos = i; break; }
+                        if w + cw > avail_w {
+                            byte_pos = i;
+                            break;
+                        }
                         w += cw;
                         byte_pos = i + ch.len_utf8();
                     }
@@ -425,24 +559,34 @@ impl Composer {
                     let chunk_end = char_offset + chunk.len();
                     if cursor_in_display >= chunk_start && cursor_in_display <= chunk_end {
                         let cursor_text = &display_text[chunk_start..cursor_in_display];
-                        cursor_visual_x = this_prefix_w + UnicodeWidthStr::width(cursor_text) as u16;
+                        cursor_visual_x =
+                            this_prefix_w + UnicodeWidthStr::width(cursor_text) as u16;
                         cursor_visual_y = visual_lines.len() as u16;
                         cursor_found = true;
                     }
                 }
 
                 // Inline hint on first visual line
-                if visual_lines.is_empty() && in_slash_mode && self.input.len() > 1 && self.input.len() <= 7 {
+                if visual_lines.is_empty()
+                    && in_slash_mode
+                    && self.input.len() > 1
+                    && self.input.len() <= 7
+                {
                     let hint = slash_hint(&self.input);
                     if !hint.is_empty() {
-                        spans.push(Span::styled(hint.to_string(), Style::default().fg(Color::Rgb(255, 165, 80))));
+                        spans.push(Span::styled(
+                            hint.to_string(),
+                            Style::default().fg(Color::Rgb(255, 165, 80)),
+                        ));
                     }
                 }
 
                 visual_lines.push(Line::from(spans));
                 char_offset += chunk.len();
 
-                if rest.is_empty() { break; }
+                if rest.is_empty() {
+                    break;
+                }
                 remaining = rest;
             }
 
@@ -454,17 +598,31 @@ impl Composer {
 
         // Vertical command list
         if in_slash_mode && self.input == "\\" {
-            let hint_style = Style::default().fg(Color::Rgb(255, 165, 80));
-            let commands = [
-                "\\quit", "\\help", "\\clear", "\\status",
-                "\\usage", "\\auth list", "\\auth instruction", "\\auth add <cmd>",
-                "\\auth remove <cmd>", "\\auth edit", "\\check", "\\mode",
-            ];
-            for cmd in commands {
-                visual_lines.push(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(cmd, hint_style),
-                ]));
+            let normal_fg = Color::Rgb(255, 165, 80);
+            let selected_fg = Color::Rgb(255, 255, 100);
+            let cursor_glyph = "❯ ";
+
+            // Blank separator line
+            visual_lines.push(Line::from(Span::styled("", Style::default())));
+
+            for (i, cmd) in ALL_COMMANDS.iter().enumerate() {
+                let (prefix, fg) = if self.selection_mode && i == self.selection_index {
+                    (cursor_glyph, selected_fg)
+                } else {
+                    ("  ", normal_fg)
+                };
+                let style = Style::default().fg(fg);
+                if self.selection_mode && i == self.selection_index {
+                    visual_lines.push(Line::from(vec![
+                        Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
+                        Span::styled(*cmd, style.add_modifier(Modifier::BOLD)),
+                    ]));
+                } else {
+                    visual_lines.push(Line::from(vec![
+                        Span::styled(prefix, style),
+                        Span::styled(*cmd, style),
+                    ]));
+                }
             }
         }
 
@@ -482,7 +640,8 @@ impl Composer {
             }
         };
 
-        let displayed: Vec<Line> = visual_lines.into_iter()
+        let displayed: Vec<Line> = visual_lines
+            .into_iter()
             .skip(scroll_offset)
             .take(max_visible)
             .collect();
@@ -508,12 +667,18 @@ fn slash_hint(input: &str) -> &'static str {
         "\\c" | "\\cl" | "\\cle" | "\\clea" | "\\clear" => " ← clear viewport",
         "\\s" | "\\st" | "\\sta" | "\\stat" | "\\statu" | "\\status" => " ← show status",
         "\\u" | "\\us" | "\\usa" | "\\usag" | "\\usage" => " ← session token/cost stats",
-        "\\au" | "\\aut" | "\\auth" => " list|instruction|add|remove|edit",
+        "\\au" | "\\aut" | "\\auth" => " list|add|remove|edit",
         "\\auth l" | "\\auth li" | "\\auth lis" | "\\auth list" => " ← show authorized commands",
-        "\\auth i" | "\\auth in" | "\\auth ins" | "\\auth inst" | "\\auth instr" | "\\auth instru" | "\\auth instruc" | "\\auth instruct" | "\\auth instructi" | "\\auth instructio" | "\\auth instruction" => " ← show authority instruction",
         "\\auth a" | "\\auth ad" | "\\auth add" => " <command> ← add to allow list",
-        "\\auth r" | "\\auth re" | "\\auth rem" | "\\auth remo" | "\\auth remov" | "\\auth remove" => " <command> ← remove from allow list",
+        "\\auth r" | "\\auth re" | "\\auth rem" | "\\auth remo" | "\\auth remov"
+        | "\\auth remove" => " <command> ← remove from allow list",
         "\\auth e" | "\\auth ed" | "\\auth edi" | "\\auth edit" => " ← open in $EDITOR",
+        "\\w" | "\\wo" | "\\wor" | "\\work" | "\\worki" | "\\workin" | "\\working" => {
+            " ← show working directory"
+        }
+        "\\working_" | "\\working_d" | "\\working_di" | "\\working_dir" => {
+            " ← show working directory"
+        }
         "\\ch" | "\\che" | "\\chec" | "\\check" => " ← system health check",
         _ => "",
     }
@@ -521,15 +686,13 @@ fn slash_hint(input: &str) -> &'static str {
 
 /// Autocomplete a partial command. Returns the full command if unambiguous.
 fn autocomplete_slash(input: &str) -> Option<String> {
-    const COMMANDS: &[&str] = &[
-        "\\quit", "\\help", "\\mode", "\\model", "\\clear",
-        "\\status", "\\usage", "\\auth", "\\check",
-        "\\auth list", "\\auth instruction", "\\auth add", "\\auth remove", "\\auth edit",
-    ];
     if input == "\\" || input == "\\auth " {
         return None; // too ambiguous
     }
-    let matches: Vec<&&str> = COMMANDS.iter().filter(|c| c.starts_with(input)).collect();
+    let matches: Vec<&&str> = ALL_COMMANDS
+        .iter()
+        .filter(|c| c.starts_with(input))
+        .collect();
     if matches.len() == 1 {
         Some(matches[0].to_string())
     } else {

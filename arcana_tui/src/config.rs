@@ -67,7 +67,10 @@ impl AgentLlmConfig {
         Self {
             provider: "deepseek".into(),
             model: "deepseek-v4-pro".into(),
-            thinking: ThinkingConfig { enabled: true, reasoning_effort: "high".into() },
+            thinking: ThinkingConfig {
+                enabled: true,
+                reasoning_effort: "high".into(),
+            },
             max_tokens: None,
             temperature: None,
         }
@@ -77,7 +80,10 @@ impl AgentLlmConfig {
         Self {
             provider: "deepseek".into(),
             model: "deepseek-v4-flash".into(),
-            thinking: ThinkingConfig { enabled: true, reasoning_effort: "high".into() },
+            thinking: ThinkingConfig {
+                enabled: true,
+                reasoning_effort: "high".into(),
+            },
             max_tokens: None,
             temperature: None,
         }
@@ -100,7 +106,10 @@ pub struct ThinkingConfig {
 
 impl Default for ThinkingConfig {
     fn default() -> Self {
-        Self { enabled: true, reasoning_effort: "high".into() }
+        Self {
+            enabled: true,
+            reasoning_effort: "high".into(),
+        }
     }
 }
 
@@ -128,7 +137,11 @@ pub struct ProviderEntry {
 
 impl Default for ProviderEntry {
     fn default() -> Self {
-        Self { api_key: String::new(), base_url: String::new(), models: Vec::new() }
+        Self {
+            api_key: String::new(),
+            base_url: String::new(),
+            models: Vec::new(),
+        }
     }
 }
 
@@ -168,7 +181,10 @@ pub struct EditorConfig {
 
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { command: default_editor(), diff_command: String::new() }
+        Self {
+            command: default_editor(),
+            diff_command: String::new(),
+        }
     }
 }
 
@@ -184,7 +200,11 @@ pub struct NotificationsConfig {
 
 impl Default for NotificationsConfig {
     fn default() -> Self {
-        Self { desktop: true, bell: true, toast_duration_secs: 5 }
+        Self {
+            desktop: true,
+            bell: true,
+            toast_duration_secs: 5,
+        }
     }
 }
 
@@ -209,13 +229,27 @@ impl Default for SessionConfig {
 }
 
 // Default value helpers
-fn default_theme() -> String { "arcane".into() }
-fn default_editor() -> String { std::env::var("EDITOR").unwrap_or_else(|_| "vim".into()) }
-fn default_collapsed() -> String { "collapsed".into() }
-fn default_true() -> bool { true }
-fn default_reasoning_effort() -> String { "high".into() }
-fn default_toast_duration() -> u64 { 5 }
-fn default_max_sessions() -> usize { 50 }
+fn default_theme() -> String {
+    "arcane".into()
+}
+fn default_editor() -> String {
+    std::env::var("EDITOR").unwrap_or_else(|_| "vim".into())
+}
+fn default_collapsed() -> String {
+    "collapsed".into()
+}
+fn default_true() -> bool {
+    true
+}
+fn default_reasoning_effort() -> String {
+    "high".into()
+}
+fn default_toast_duration() -> u64 {
+    5
+}
+fn default_max_sessions() -> usize {
+    50
+}
 
 impl Config {
     /// Load config from ~/.arcana/config.toml
@@ -255,8 +289,18 @@ impl Config {
         Ok(arcana_home)
     }
 
-    /// Remove ~/.arcana directory (for --reset)
-    pub fn reset() -> Result<(), Box<dyn std::error::Error>> {
+    /// Remove the project-level `.arcana/` workspace (for `--reset`).
+    pub fn reset_project() -> Result<(), Box<dyn std::error::Error>> {
+        let cwd = std::env::current_dir()?;
+        let arcana_dir = cwd.join(".arcana");
+        if arcana_dir.exists() {
+            std::fs::remove_dir_all(&arcana_dir)?;
+        }
+        Ok(())
+    }
+
+    /// Remove `~/.arcana/` directory (for `--reset --factory`).
+    pub fn reset_factory() -> Result<(), Box<dyn std::error::Error>> {
         let home = dirs::home_dir().ok_or("cannot find home directory")?;
         let arcana_home = home.join(".arcana");
         if arcana_home.exists() {

@@ -318,7 +318,8 @@ arcana onboard                  # First-time setup wizard
 arcana <project> -q "prompt"    # Single-shot query
 arcana --model <model>          # Override model for this session
 arcana --provider <provider>    # Override provider for this session
-arcana --reset                  # Remove ~/.arcana and recreate (factory reset)
+arcana --reset [<project>]      # Reset project workspace ./.arcana/ (confirmation required)
+arcana --reset --factory        # Reset global ~/.arcana/ (extra warning + confirmation)
 arcana resume [--last | <id>]   # Resume a session
 arcana recover <project> [--to-seq N]  # Recover project state (see authority design)
 arcana check                    # Check setup & connectivity
@@ -381,7 +382,8 @@ arcana config                   # Show current configuration (same as `arcana co
 arcana config show              # Print effective config as TOML
 arcana config edit              # Open ~/.arcana/config.toml in $EDITOR
 arcana config path              # Print config file path
-arcana --reset                  # Remove ~/.arcana entirely and recreate (factory reset)
+arcana --reset [<project>]      # Remove project workspace (confirmation required)
+arcana --reset --factory        # Remove ~/.arcana/ entirely (extra warning + confirmation)
 ```
 
 Note: `~/.arcana/` is automatically created on every launch if it doesn't exist.

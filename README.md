@@ -124,7 +124,27 @@ readonly = ["/etc", "/usr"]
 deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
 ```
 
-Runtime management: `\auth list|instruction|add|remove|edit`
+Runtime management: `\auth list|add|remove|edit`
+
+#### LLM Authority Instruction
+
+The authority program reads the human-maintained authority instruction and auto-generates `.arcana/authorized_prompt.md` as mandatory first-line LLM context. The instruction stays API-only; current filesystem, command, and network policy is exposed separately as a structured authority snapshot.
+
+Agents interact with authority by sending JSONL requests to the session authority socket:
+
+```bash
+# View the instruction text:
+arcana auth instruction
+```
+
+```json
+{"op":"instruction"}
+{"op":"list_authority"}
+{"op":"query","path":"README.md"}
+{"op":"fetch","url":"https://example.com","tag":null}
+```
+
+The generated prompt is refreshed on server startup and after runtime authority changes.
 
 ---
 
@@ -306,19 +326,20 @@ arcana onboard
 
 # Start working
 cd your-project
-arcana .
+arcana
 ```
 
 ### Key Commands
 
 ```bash
-arcana .                        # Interactive session for current project
-arcana . -q "explain main.rs"   # Single-shot query for current project
-arcana                          # Ask before using launch path as project
+arcana                          # Interactive session
+arcana <project-path>           # Launch in specific project directory
+arcana -q "explain main.rs"    # Single-shot query
 arcana --model deepseek-v4-flash  # Override model
 arcana config show              # View configuration
 arcana config edit              # Edit config in $EDITOR
-arcana --reset                  # Factory reset
+arcana --reset [<project>]      # Reset project workspace (confirmation required)
+arcana --reset --factory        # Reset global ~/.arcana/ (extra warning + confirmation)
 arcana check                    # System health check
 arcana resume --last            # Resume previous session
 ```
@@ -331,7 +352,6 @@ arcana resume --last            # Resume previous session
 | `Ctrl+e` | Open `$EDITOR` for prompt editing |
 | `Ctrl+b` | Stop LLM generation immediately |
 | `Ctrl+o` | Toggle thinking chain expand/collapse |
-| `Ctrl+y` | Toggle terminal text selection mode |
 | `Ctrl+j` / `Ctrl+k` | Scroll viewport down/up |
 | `Ctrl+Enter` | Newline in composer (also `Shift+Enter`) |
 | `Ctrl+w` | Delete word left |
@@ -343,17 +363,21 @@ arcana resume --last            # Resume previous session
 
 ### TUI Commands (prefix: `\`)
 
+Type `\` then press `↓` to browse all commands with arrow keys. Press `Esc` to exit selection.
+
 | Command | Action |
 |---------|--------|
 | `\quit` | Exit session |
 | `\clear` | Clear viewport |
 | `\status` | Show model/token info |
 | `\usage` | Session token/cost statistics |
+| `\working_dir` | Show current working directory |
 | `\check` | System health check |
 | `\auth list` | Show authorized commands |
-| `\auth instruction` | Show `~/.arcana/INSTRUCTION.md` |
 | `\auth add <cmd>` | Add to allow list |
 | `\auth remove <cmd>` | Remove from allow list |
+| `\auth edit` | Open authority.toml in `$EDITOR` |
+| `\help` | Show all commands and hotkeys |
 | `\auth edit` | Open authority.toml in `$EDITOR` |
 | `\help` | Show all commands and hotkeys |
 
@@ -411,7 +435,8 @@ Arcana-Agent/
 - [x] `arcana onboard` — interactive & non-interactive setup wizard
 - [x] `arcana -q "..."` — single-shot LLM query (DeepSeek API, with thinking mode)
 - [x] `arcana version` / `arcana check` / `arcana config show|path|edit`
-- [x] `arcana --reset` — factory reset
+- [x] `arcana --reset [<project>]` — reset project workspace (with confirmation)
+- [x] `arcana --reset --factory` — reset global config (with extra warning)
 - [x] Interactive TUI shell (viewport, composer, status bar, keybindings)
 - [x] Collapsible task panel (Ctrl+T) with tree-style indicators
 - [x] Interactive LLM streaming — TUI session sends messages to DeepSeek with SSE streaming
@@ -434,9 +459,9 @@ Arcana-Agent/
 - [ ] **Skills daemon** — trigger-based skill loading, hot-reload, manifest parsing
 - [ ] **Memory system** — knowledge DB, semantic search, error patterns, session recall
 - [ ] **Embedding model download** — `arcana onboard` does not yet download `all-MiniLM-L6-v2.onnx`
-- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery
+- [ ] **Authority & recording** — permission gate, git-like mutation recording, crash recovery (prompt generation implemented)
 - [ ] **`arcana recover`** — restore project state from `git_record`
-- [ ] **Tool calls** — shell execution, file read/write, search, web fetch
+- [ ] **Tool calls** — shell execution, file read/write, search, web fetch (IPC protocol implemented)
 - [ ] **Diff review panel** — interactive accept/reject of file mutations
 - [ ] **OpenAI / Anthropic provider support** — only DeepSeek is wired up
 - [ ] **Context caching** — leveraging DeepSeek's prefix caching for long contexts
