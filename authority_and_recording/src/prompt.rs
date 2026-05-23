@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use crate::authority::Authority;
 
-const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority Interface
+const DEFAULT_INSTRUCTION: &str = r#"# Interface for `Arcana Authority System (AAS)`
 
-Use the Arcana Authority System for every filesystem mutation, command execution, network request, and runtime tool change. Ask the authority system when permission is unclear.
+`Arcana Authority System` is used for every filesystem mutation, command execution, network request, and runtime tool change. Ask AAS when permission is unclear.
 
 Communicate with the authority process over the session IPC channel by sending one JSON object per line. Each request returns one JSON object on one line.
 
