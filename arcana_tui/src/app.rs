@@ -162,16 +162,16 @@ impl App {
                 self.composer.move_end();
             }
             KeyAction::Up => {
-                if self.composer.input.is_empty() {
+                if self.composer.input.is_empty() || self.composer.history_index.is_some() {
                     self.composer.recall_previous();
                 } else {
                     self.composer.move_up();
                 }
             }
             KeyAction::Down => {
-                if self.composer.input.is_empty() {
+                if self.composer.history_index.is_some() {
                     self.composer.recall_next();
-                } else {
+                } else if !self.composer.input.is_empty() {
                     self.composer.move_down();
                 }
             }
@@ -273,9 +273,9 @@ impl App {
                 }
             }
             KeyAction::Down => {
-                if self.overlay.composer.input.is_empty() {
+                if self.overlay.composer.history_index.is_some() {
                     self.overlay.composer.recall_next();
-                } else {
+                } else if !self.overlay.composer.input.is_empty() {
                     self.overlay.composer.move_down();
                 }
             }
@@ -590,8 +590,7 @@ Hotkeys:\n\
                                             }
                                         } else {
                                             app.viewport.add_error_message(
-                                                "No config.toml found. Run: arcana onboard"
-                                                    .into(),
+                                                "No config.toml found. Run: arcana onboard".into(),
                                             );
                                         }
                                     }
@@ -602,18 +601,18 @@ Hotkeys:\n\
                                         let editor = config.editor.command.clone();
                                         event_handle.abort();
                                         tui.suspend()?;
-                                        let _ = std::process::Command::new(&editor)
-                                            .arg(&path)
-                                            .status();
+                                        let _ =
+                                            std::process::Command::new(&editor).arg(&path).status();
                                         tui.resume()?;
                                         let (tx, rx, handle) = event::spawn_event_reader();
                                         event_tx = tx;
                                         events = rx;
                                         event_handle = handle;
                                         app.composer.clear();
-                                        app.viewport.add_error_message(
-                                            format!("Config reloaded from {}", path.display())
-                                        );
+                                        app.viewport.add_error_message(format!(
+                                            "Config reloaded from {}",
+                                            path.display()
+                                        ));
                                     }
                                     cmd if cmd.starts_with("\\auth add ") => {
                                         let pattern =
