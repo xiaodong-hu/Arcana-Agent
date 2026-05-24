@@ -69,12 +69,12 @@ The authority program **auto-generates** a project-level file `.arcana/authorize
 
 - **On server startup:** The authority program writes `.arcana/authorized_prompt.md` before accepting connections.
 - **On hot-change:** After successful runtime registration or config reload, the file is regenerated.
-- **CLI access:** `authority_and_recording auth prompt [project_root]` prints the prompt to stdout and writes the file.
+- **CLI access:** `authority_and_recording auth instruction [project_root]` prints the instruction text.
 - **IPC access:** `{"op": "prompt"}` returns the prompt content directly (not base64 — plain text).
 
 #### Usage by TUI
 
-The TUI (`arcana_tui`) reads `.arcana/authorized_prompt.md` and **mandatorily prepends** it to the system message at the start of each session. When the model emits AAS JSON request lines, Arcana-Agent relays them to `.arcana/authority.sock`, appends the JSON responses back into the conversation, and lets the model continue. This ensures the LLM always knows:
+The TUI (`arcana_tui`) reads `.arcana/authorized_prompt.md` and **mandatorily prepends** it to the system message at the start of each session. When the model emits AAS JSON request lines, Arcana-Agent asks the human to approve/edit/abort privileged operations, relays approved requests to `.arcana/authority.sock`, shows command stdout/stderr in an embedded tool-call panel, appends the JSON responses back into the conversation, and lets the model continue. This ensures the LLM always knows:
 - What tools are available and how to invoke them.
 - What permissions it has (so it doesn't attempt denied operations).
 - That all operations go through the authority socket (not direct filesystem access).

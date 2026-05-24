@@ -1,11 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::*;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
-use crate::banner;
 use crate::cli::ResumeArgs;
 use crate::composer::Composer;
 use crate::config::Config;
@@ -83,6 +84,9 @@ impl App {
             KeyAction::Expand => {
                 // Ctrl+O: toggle ALL thinking chains
                 self.viewport.toggle_thinking();
+            }
+            KeyAction::ToggleToolCalls => {
+                self.viewport.toggle_tool_calls();
             }
             KeyAction::FocusDown => {
                 // Ctrl+j: scroll viewport down
@@ -416,6 +420,91 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[Toast]) {
     }
 }
 
+struct AuthorityDaemon {
+    child: Option<Child>,
+}
+
+impl Drop for AuthorityDaemon {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn ensure_authority_daemon(
+    inherit_terminal: bool,
+) -> Result<AuthorityDaemon, Box<dyn std::error::Error>> {
+    let socket_path = Path::new(".arcana/authority.sock");
+    if authority_socket_ready(socket_path) {
+        return Ok(AuthorityDaemon { child: None });
+    }
+    if socket_path.exists() {
+        fs::remove_file(socket_path)?;
+    }
+
+    let binary = find_authority_binary()
+        .ok_or("cannot find authority_and_recording binary; build it before launching Arcana")?;
+    let mut command = std::process::Command::new(binary);
+    command.arg(".");
+    if inherit_terminal {
+        command
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+    } else {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+    }
+
+    let mut child = command.spawn()?;
+    for _ in 0..50 {
+        if authority_socket_ready(socket_path) {
+            return Ok(AuthorityDaemon { child: Some(child) });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Err("authority daemon did not create .arcana/authority.sock in time".into())
+}
+
+fn authority_socket_ready(socket_path: &Path) -> bool {
+    socket_path.exists() && UnixStream::connect(socket_path).is_ok()
+}
+
+fn find_authority_binary() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent()?;
+    let candidates = [
+        repo_root
+            .join("authority_and_recording")
+            .join("target")
+            .join("release")
+            .join("authority_and_recording"),
+        repo_root
+            .join("authority_and_recording")
+            .join("target")
+            .join("debug")
+            .join("authority_and_recording"),
+        repo_root
+            .join("arcana_tui")
+            .join("target")
+            .join("release")
+            .join("authority_and_recording"),
+        repo_root
+            .join("arcana_tui")
+            .join("target")
+            .join("debug")
+            .join("authority_and_recording"),
+    ];
+    candidates.into_iter().find(|path| path.exists())
+}
+
 /// Run the interactive TUI session.
 pub async fn interactive(
     model: Option<String>,
@@ -430,6 +519,7 @@ pub async fn interactive(
         config.agents.main.provider = p;
     }
 
+    let _authority_daemon = ensure_authority_daemon(false)?;
     let mut tui = Tui::new()?;
     let mut app = App::new(&config);
 
@@ -515,6 +605,7 @@ Hotkeys:\n\
   Ctrl+e         Open $EDITOR for prompt\n\
   Ctrl+/         Toggle query agent\n\
   Ctrl+o         Expand/collapse thinking chains\n\
+  Ctrl+x         Expand/collapse tool-call panels\n\
   Ctrl+j/k       Scroll viewport down/up\n\
   Ctrl+h/l       Move cursor word left/right\n\
   Ctrl+w         Delete word left\n\
@@ -881,22 +972,49 @@ Hotkeys:\n\
 
                     let authority_requests = extract_authority_json_requests(&response_text);
                     if !authority_requests.is_empty() {
-                        app.viewport.messages.push(Message {
-                            role: MessageRole::System,
-                            content: format!(
-                                "[AAS Bridge]\nRelaying {} request(s) to authority.",
-                                authority_requests.len()
-                            ),
-                            timestamp: chrono::Utc::now(),
-                            thinking: None,
-                            tool_calls: Vec::new(),
-                        });
-
                         let socket_path = Path::new(".arcana/authority.sock");
                         let mut responses = Vec::new();
                         for request in authority_requests {
+                            event_handle.abort();
+                            tui.suspend()?;
+                            let approval = approve_authority_request(request.clone())?;
+                            tui.resume()?;
+                            let (tx, rx, handle) = event::spawn_event_reader();
+                            event_tx = tx;
+                            events = rx;
+                            event_handle = handle;
+
+                            let approved = match approval {
+                                AuthorityApproval::Approved(approved) => approved,
+                                AuthorityApproval::Aborted {
+                                    response,
+                                    tool_type,
+                                    description,
+                                } => {
+                                    app.viewport.add_tool_call(ToolCall {
+                                        tool_type,
+                                        description,
+                                        result: Some(response.to_string()),
+                                        duration_ms: 0,
+                                        collapsed: false,
+                                    });
+                                    responses.push(response);
+                                    continue;
+                                }
+                            };
+
+                            app.viewport.add_tool_call(ToolCall {
+                                tool_type: approved.tool_type,
+                                description: approved.description.clone(),
+                                result: None,
+                                duration_ms: 0,
+                                collapsed: false,
+                            });
+                            tui.draw(|frame| app.render(frame))?;
+
+                            let started_at = Instant::now();
                             let response = if socket_path.exists() {
-                                match authority_request(socket_path, request.clone()) {
+                                match authority_request(socket_path, approved.request.clone()) {
                                     Ok(response) => response,
                                     Err(e) => serde_json::json!({
                                         "status": "denied",
@@ -909,13 +1027,10 @@ Hotkeys:\n\
                                     "reason": "AAS bridge failed: .arcana/authority.sock not found"
                                 })
                             };
-                            app.viewport.messages.push(Message {
-                                role: MessageRole::System,
-                                content: format!("[AAS] {} -> {}", request, response),
-                                timestamp: chrono::Utc::now(),
-                                thinking: None,
-                                tool_calls: Vec::new(),
-                            });
+                            app.viewport.finish_latest_tool_call(
+                                format_authority_tool_result(&response),
+                                started_at.elapsed().as_millis() as u64,
+                            );
                             responses.push(response);
                         }
 
@@ -1044,6 +1159,8 @@ pub async fn single_shot(
     println!("[arcana] Model: {} ({})", model_name, provider_name);
     println!("[arcana] Query: {}", query);
     println!();
+
+    let _authority_daemon = ensure_authority_daemon(true)?;
 
     // Resolve API key (env var takes priority over literal "$VAR" in config)
     let api_key = config.resolve_api_key(provider_name).ok_or_else(|| {
@@ -1249,6 +1366,21 @@ async fn authority_context_for_query(query: &str, _config: &Config) -> String {
     } else {
         format!("Authority-fetched context:\n\n{}", sections.join("\n\n"))
     }
+}
+
+struct ApprovedAuthorityRequest {
+    request: serde_json::Value,
+    tool_type: ToolType,
+    description: String,
+}
+
+enum AuthorityApproval {
+    Approved(ApprovedAuthorityRequest),
+    Aborted {
+        response: serde_json::Value,
+        tool_type: ToolType,
+        description: String,
+    },
 }
 
 /// Fetch a URL via the authority daemon over its unix socket.
@@ -1614,6 +1746,305 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&trade;", "™")
 }
 
+fn approve_authority_request(
+    mut request: serde_json::Value,
+) -> Result<AuthorityApproval, Box<dyn std::error::Error>> {
+    loop {
+        let details = authority_request_details(&request);
+        eprintln!();
+        eprintln!(
+            "[{}] LLM requires {} `{}`. Confirm Allowance?",
+            details.kind, details.verb, details.target
+        );
+        if details.kind == "Tool Call" {
+            eprintln!("    - Yes and Run [y/Enter]");
+        } else {
+            eprintln!("    - Yes [y/Enter]");
+        }
+        eprintln!("    - No and Edit [e]");
+        eprint!("    - No and Abort [n/a]: ");
+        std::io::stderr().flush().ok();
+
+        let mut input = String::new();
+        let answer = if std::io::stdin().read_line(&mut input).is_ok() {
+            input.trim().to_ascii_lowercase()
+        } else {
+            "n".into()
+        };
+
+        if answer.is_empty() || answer == "y" || answer == "yes" {
+            return Ok(AuthorityApproval::Approved(ApprovedAuthorityRequest {
+                request: confirmed_authority_request(request),
+                tool_type: details.tool_type,
+                description: details.target,
+            }));
+        }
+
+        if answer == "e" {
+            match edit_authority_target(&details.target) {
+                Ok(edited) if !edited.trim().is_empty() => {
+                    request = edit_authority_request_target(request, edited.trim());
+                    continue;
+                }
+                Ok(_) => {
+                    return Ok(aborted_authority_approval(
+                        details.tool_type,
+                        details.target,
+                        details.abort_error_type,
+                        format!("{} edit produced an empty request", details.kind),
+                    ));
+                }
+                Err(e) => {
+                    return Ok(aborted_authority_approval(
+                        details.tool_type,
+                        details.target,
+                        details.abort_error_type,
+                        format!("{} edit failed: {e}", details.kind),
+                    ));
+                }
+            }
+        }
+
+        if answer == "n" || answer == "no" || answer == "a" || answer == "abort" {
+            return Ok(aborted_authority_approval(
+                details.tool_type,
+                details.target.clone(),
+                details.abort_error_type,
+                format!("{} aborted by user: {}", details.kind, details.target),
+            ));
+        }
+    }
+}
+
+struct AuthorityRequestDetails {
+    kind: &'static str,
+    verb: &'static str,
+    target: String,
+    tool_type: ToolType,
+    abort_error_type: &'static str,
+}
+
+fn authority_request_details(request: &serde_json::Value) -> AuthorityRequestDetails {
+    match request.get("op").and_then(|op| op.as_str()).unwrap_or("") {
+        "exec_shell" => AuthorityRequestDetails {
+            kind: "Tool Call",
+            verb: "run of",
+            target: request["command"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Shell,
+            abort_error_type: "ToolCallAbortError",
+        },
+        "exec" => {
+            let cmd = request["cmd"].as_str().unwrap_or("");
+            let args = request["args"]
+                .as_array()
+                .map(|args| {
+                    args.iter()
+                        .filter_map(|arg| arg.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            AuthorityRequestDetails {
+                kind: "Tool Call",
+                verb: "run of",
+                target: if args.is_empty() {
+                    cmd.to_string()
+                } else {
+                    format!("{cmd} {args}")
+                },
+                tool_type: ToolType::Shell,
+                abort_error_type: "ToolCallAbortError",
+            }
+        }
+        "fetch" => AuthorityRequestDetails {
+            kind: "Web Access",
+            verb: "web fetch/browse of",
+            target: request["url"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Web,
+            abort_error_type: "WebAccessAbortError",
+        },
+        "read" | "write" | "delete" => AuthorityRequestDetails {
+            kind: "File Access",
+            verb: match request["op"].as_str().unwrap_or("") {
+                "read" => "read access of",
+                "write" => "write access of",
+                _ => "delete access of",
+            },
+            target: request["path"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::File,
+            abort_error_type: "FileAccessAbortError",
+        },
+        "rename" => AuthorityRequestDetails {
+            kind: "File Access",
+            verb: "rename access of",
+            target: format!(
+                "{} -> {}",
+                request["src"].as_str().unwrap_or(""),
+                request["dst"].as_str().unwrap_or("")
+            ),
+            tool_type: ToolType::File,
+            abort_error_type: "FileAccessAbortError",
+        },
+        "register_command" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["pattern"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Other,
+            abort_error_type: "ToolRegistrationAbortError",
+        },
+        "register_web" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["domain"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Web,
+            abort_error_type: "WebAccessRegistrationAbortError",
+        },
+        "register_filesystem" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["path"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::File,
+            abort_error_type: "FileAccessRegistrationAbortError",
+        },
+        "register_tool" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["path"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Other,
+            abort_error_type: "ToolRegistrationAbortError",
+        },
+        _ => AuthorityRequestDetails {
+            kind: "Authority Request",
+            verb: "request of",
+            target: request.to_string(),
+            tool_type: ToolType::Other,
+            abort_error_type: "ToolCallAbortError",
+        },
+    }
+}
+
+fn aborted_authority_approval(
+    tool_type: ToolType,
+    description: String,
+    error_type: &'static str,
+    message: String,
+) -> AuthorityApproval {
+    AuthorityApproval::Aborted {
+        response: serde_json::json!({
+            "status": "aborted",
+            "error_type": error_type,
+            "message": message
+        }),
+        tool_type,
+        description,
+    }
+}
+
+fn confirmed_authority_request(mut request: serde_json::Value) -> serde_json::Value {
+    if let Some(op) = request.get("op").and_then(|op| op.as_str()) {
+        let confirmed_op = match op {
+            "exec" => Some("exec_confirmed"),
+            "exec_shell" => Some("exec_shell_confirmed"),
+            "fetch" => Some("fetch_confirmed"),
+            "write" => Some("write_confirmed"),
+            "delete" => Some("delete_confirmed"),
+            "rename" => Some("rename_confirmed"),
+            "register_tool" => Some("register_tool_confirmed"),
+            "register_command" => Some("register_command_confirmed"),
+            "register_web" => Some("register_web_confirmed"),
+            "register_filesystem" => Some("register_filesystem_confirmed"),
+            _ => None,
+        };
+        if let Some(confirmed_op) = confirmed_op {
+            request["op"] = serde_json::json!(confirmed_op);
+        }
+    }
+    request
+}
+
+fn edit_authority_request_target(
+    mut request: serde_json::Value,
+    edited: &str,
+) -> serde_json::Value {
+    match request.get("op").and_then(|op| op.as_str()).unwrap_or("") {
+        "exec_shell" => request["command"] = serde_json::json!(edited),
+        "exec" => {
+            request = serde_json::json!({"op": "exec_shell", "command": edited});
+        }
+        "fetch" => request["url"] = serde_json::json!(edited),
+        "read" | "write" | "delete" => request["path"] = serde_json::json!(edited),
+        "register_command" => request["pattern"] = serde_json::json!(edited),
+        "register_web" => request["domain"] = serde_json::json!(edited),
+        "register_filesystem" | "register_tool" => request["path"] = serde_json::json!(edited),
+        "rename" => {
+            if let Some((src, dst)) = edited.split_once("->") {
+                request["src"] = serde_json::json!(src.trim());
+                request["dst"] = serde_json::json!(dst.trim());
+            }
+        }
+        _ => {}
+    }
+    request
+}
+
+fn edit_authority_target(current: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let path = std::env::temp_dir().join("arcana_authority_request.txt");
+    fs::write(&path, current)?;
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+    let status = std::process::Command::new(editor).arg(&path).status()?;
+    if !status.success() {
+        return Err("editor exited with non-zero status".into());
+    }
+    let mut edited = String::new();
+    fs::File::open(path)?.read_to_string(&mut edited)?;
+    Ok(edited)
+}
+
+fn format_authority_tool_result(response: &serde_json::Value) -> String {
+    match response.get("status").and_then(|status| status.as_str()) {
+        Some("exec_result") => {
+            let code = response["code"].as_i64().unwrap_or(-1);
+            let stdout = response["stdout"].as_str().unwrap_or("");
+            let stderr = response["stderr"].as_str().unwrap_or("");
+            let mut out = format!("exit code: {code}\nstdout:\n");
+            out.push_str(if stdout.is_empty() {
+                "<empty>\n"
+            } else {
+                stdout
+            });
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("stderr:\n");
+            out.push_str(if stderr.is_empty() { "<empty>" } else { stderr });
+            out
+        }
+        Some("fetched") => format!(
+            "fetched: {} ({} bytes)",
+            response["path"].as_str().unwrap_or("<unknown>"),
+            response["bytes"].as_u64().unwrap_or(0)
+        ),
+        Some("content") => {
+            let bytes = response["data"]
+                .as_str()
+                .map(|data| data.len())
+                .unwrap_or(0);
+            format!("content returned: {bytes} base64 characters")
+        }
+        Some("ok") => "ok".to_string(),
+        Some("denied") => format!(
+            "denied: {}",
+            response["reason"].as_str().unwrap_or("unknown reason")
+        ),
+        Some("aborted") => format!(
+            "aborted: {}: {}",
+            response["error_type"].as_str().unwrap_or("AbortError"),
+            response["message"].as_str().unwrap_or("")
+        ),
+        _ => response.to_string(),
+    }
+}
+
 fn authority_request(
     socket_path: &Path,
     req: serde_json::Value,
@@ -1689,8 +2120,20 @@ fn extract_authority_json_requests(content: &str) -> Vec<serde_json::Value> {
 }
 
 fn normalize_authority_request(value: serde_json::Value) -> Option<serde_json::Value> {
-    if value.get("op").and_then(|op| op.as_str()).is_some() {
+    if let Some(op) = value.get("op").and_then(|op| op.as_str()) {
+        if op.ends_with("_confirmed") {
+            return None;
+        }
         return Some(value);
+    }
+
+    if value.get("action").and_then(|action| action.as_str()) == Some("execute") {
+        let language = value
+            .get("language")
+            .and_then(|language| language.as_str())?;
+        let code = value.get("code").and_then(|code| code.as_str())?;
+        return language_execution_command(language, code)
+            .map(|command| serde_json::json!({"op": "exec_shell", "command": command}));
     }
 
     let command = value.get("command").and_then(|command| command.as_str())?;
@@ -1707,7 +2150,7 @@ fn normalize_authority_request(value: serde_json::Value) -> Option<serde_json::V
         "write_file" => {
             let path = params.get("path").and_then(|path| path.as_str())?;
             let content = params.get("content").and_then(|content| content.as_str())?;
-            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
             Some(serde_json::json!({
                 "op": "write",
                 "path": path,
@@ -1723,6 +2166,19 @@ fn normalize_authority_request(value: serde_json::Value) -> Option<serde_json::V
         }
         _ => None,
     }
+}
+
+fn language_execution_command(language: &str, code: &str) -> Option<String> {
+    let executable = match language.to_ascii_lowercase().as_str() {
+        "python" | "python3" => "python3",
+        "julia" => "julia",
+        "bash" | "sh" | "shell" => "sh",
+        _ => return None,
+    };
+    let delimiter = "ARCANA_TOOL_EOF";
+    Some(format!(
+        "{executable} << '{delimiter}'\n{code}\n{delimiter}"
+    ))
 }
 
 fn extract_urls(text: &str) -> Vec<String> {

@@ -97,22 +97,43 @@ impl Server {
         match req {
             Request::Read { path } => self.handle_read(&path),
             Request::Write { path, content } => self.handle_write(&path, &content),
+            Request::WriteConfirmed { path, content } => {
+                self.handle_write_confirmed(&path, &content)
+            }
             Request::Delete { path } => self.handle_delete(&path),
+            Request::DeleteConfirmed { path } => self.handle_delete_confirmed(&path),
             Request::Rename { src, dst } => self.handle_rename(&src, &dst),
+            Request::RenameConfirmed { src, dst } => self.handle_rename_confirmed(&src, &dst),
             Request::Query { path } => Ok(self.handle_query(&path)),
             Request::Fetch { url, tag: _ } => self.handle_fetch(&url),
+            Request::FetchConfirmed { url, tag: _ } => self.handle_fetch_confirmed(&url),
             Request::Exec { cmd, args } => self.handle_exec(&cmd, &args),
+            Request::ExecConfirmed { cmd, args } => self.handle_exec_confirmed(&cmd, &args),
             Request::ExecShell { command } => self.handle_exec_shell(&command),
+            Request::ExecShellConfirmed { command } => self.handle_exec_shell_confirmed(&command),
             Request::RegisterTool {
                 name,
                 path,
                 args,
                 description,
             } => self.handle_register_tool(&name, &path, &args, &description),
+            Request::RegisterToolConfirmed {
+                name,
+                path,
+                args,
+                description,
+            } => self.handle_register_tool_confirmed(&name, &path, &args, &description),
             Request::RegisterCommand { pattern } => self.handle_register_command(&pattern),
+            Request::RegisterCommandConfirmed { pattern } => {
+                self.handle_register_command_confirmed(&pattern)
+            }
             Request::RegisterWeb { domain } => self.handle_register_web(&domain),
+            Request::RegisterWebConfirmed { domain } => self.handle_register_web_confirmed(&domain),
             Request::RegisterFilesystem { access, path } => {
                 self.handle_register_filesystem(access, &path)
+            }
+            Request::RegisterFilesystemConfirmed { access, path } => {
+                self.handle_register_filesystem_confirmed(access, &path)
             }
             Request::Instruction => self.handle_instruction(),
             Request::ListAuthority => Ok(Response::Authority {
@@ -144,6 +165,17 @@ impl Server {
         if let Err(resp) = self.authorize_write(path) {
             return Ok(resp);
         }
+        self.write_authorized(path, content_b64)
+    }
+
+    fn handle_write_confirmed(&mut self, path: &str, content_b64: &str) -> io::Result<Response> {
+        if let Err(resp) = self.authorize_write_confirmed(path) {
+            return Ok(resp);
+        }
+        self.write_authorized(path, content_b64)
+    }
+
+    fn write_authorized(&mut self, path: &str, content_b64: &str) -> io::Result<Response> {
         let content = base64_decode(content_b64)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad base64"))?;
 
@@ -162,6 +194,17 @@ impl Server {
         if let Err(resp) = self.authorize_write(path) {
             return Ok(resp);
         }
+        self.delete_authorized(path)
+    }
+
+    fn handle_delete_confirmed(&mut self, path: &str) -> io::Result<Response> {
+        if let Err(resp) = self.authorize_write_confirmed(path) {
+            return Ok(resp);
+        }
+        self.delete_authorized(path)
+    }
+
+    fn delete_authorized(&mut self, path: &str) -> io::Result<Response> {
         let full_path = self.authority.resolve(path);
         let prev_blob = self.record.hash_file(&full_path)?;
         self.record.append("delete", path, None, prev_blob, None)?;
@@ -175,6 +218,17 @@ impl Server {
         if let Err(resp) = self.authorize_write(src) {
             return Ok(resp);
         }
+        self.rename_authorized(src, dst)
+    }
+
+    fn handle_rename_confirmed(&mut self, src: &str, dst: &str) -> io::Result<Response> {
+        if let Err(resp) = self.authorize_write_confirmed(src) {
+            return Ok(resp);
+        }
+        self.rename_authorized(src, dst)
+    }
+
+    fn rename_authorized(&mut self, src: &str, dst: &str) -> io::Result<Response> {
         let src_path = self.authority.resolve(src);
         let dst_path = self.authority.resolve(dst);
         let prev_blob = self.record.hash_file(&src_path)?;
@@ -228,6 +282,16 @@ impl Server {
             });
         }
 
+        self.perform_fetch(url)
+    }
+
+    fn handle_fetch_confirmed(&mut self, url: &str) -> io::Result<Response> {
+        let domain = extract_domain(url).unwrap_or_default();
+        if let RuleVerdict::Deny = self.authority.check_web(&domain) {
+            return Ok(Response::Denied {
+                reason: "web access denied".into(),
+            });
+        }
         self.perform_fetch(url)
     }
 
@@ -318,6 +382,25 @@ impl Server {
         })
     }
 
+    fn handle_exec_confirmed(&self, cmd: &str, args: &[String]) -> io::Result<Response> {
+        if let RuleVerdict::Deny = self.authority.check_tool(cmd, args) {
+            return Ok(Response::Denied {
+                reason: "command not allowed".into(),
+            });
+        }
+
+        let output = Command::new(cmd)
+            .args(args)
+            .current_dir(self.authority.project_root())
+            .output()?;
+
+        Ok(Response::ExecResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            code: output.status.code().unwrap_or(-1),
+        })
+    }
+
     fn handle_exec_shell(&self, command: &str) -> io::Result<Response> {
         let command = match self.authority.editable_approval(
             "Tool Call",
@@ -339,6 +422,27 @@ impl Server {
         let output = Command::new("sh")
             .arg("-c")
             .arg(&command)
+            .current_dir(self.authority.project_root())
+            .output()?;
+
+        Ok(Response::ExecResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            code: output.status.code().unwrap_or(-1),
+        })
+    }
+
+    fn handle_exec_shell_confirmed(&self, command: &str) -> io::Result<Response> {
+        let args = vec!["-c".to_string(), command.to_string()];
+        if let RuleVerdict::Deny = self.authority.check_tool("sh", &args) {
+            return Ok(Response::Denied {
+                reason: "command not allowed".into(),
+            });
+        }
+
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(command)
             .current_dir(self.authority.project_root())
             .output()?;
 
@@ -389,6 +493,29 @@ impl Server {
         Ok(Response::Ok)
     }
 
+    fn handle_register_tool_confirmed(
+        &mut self,
+        name: &str,
+        path: &str,
+        args: &[String],
+        _description: &str,
+    ) -> io::Result<Response> {
+        if !self.authority.runtime_registration_allowed() {
+            return Ok(Response::Denied {
+                reason: "runtime registration disabled".into(),
+            });
+        }
+        let command_pattern = if args.is_empty() {
+            path.to_string()
+        } else {
+            format!("{} {}", path, args.join(" "))
+        };
+        self.authority.register_tool_runtime(name);
+        self.authority.register_command(&command_pattern)?;
+        self.regenerate_prompt()?;
+        Ok(Response::Ok)
+    }
+
     fn handle_register_command(&mut self, pattern: &str) -> io::Result<Response> {
         match self.authority.editable_approval(
             "Tool Registration",
@@ -406,6 +533,12 @@ impl Server {
                 });
             }
         }
+        self.regenerate_prompt()?;
+        Ok(Response::Ok)
+    }
+
+    fn handle_register_command_confirmed(&mut self, pattern: &str) -> io::Result<Response> {
+        self.authority.register_command(pattern)?;
         self.regenerate_prompt()?;
         Ok(Response::Ok)
     }
@@ -431,6 +564,12 @@ impl Server {
         Ok(Response::Ok)
     }
 
+    fn handle_register_web_confirmed(&mut self, domain: &str) -> io::Result<Response> {
+        self.authority.register_web(domain)?;
+        self.regenerate_prompt()?;
+        Ok(Response::Ok)
+    }
+
     fn handle_register_filesystem(
         &mut self,
         access: crate::types::FilesystemAccess,
@@ -452,6 +591,16 @@ impl Server {
                 });
             }
         }
+        self.regenerate_prompt()?;
+        Ok(Response::Ok)
+    }
+
+    fn handle_register_filesystem_confirmed(
+        &mut self,
+        access: crate::types::FilesystemAccess,
+        path: &str,
+    ) -> io::Result<Response> {
+        self.authority.register_filesystem(access, path)?;
         self.regenerate_prompt()?;
         Ok(Response::Ok)
     }
@@ -486,6 +635,15 @@ impl Server {
                     message,
                 }),
             },
+        }
+    }
+
+    fn authorize_write_confirmed(&self, path: &str) -> Result<(), Response> {
+        match self.authority.check_write(path) {
+            RuleVerdict::Deny => Err(Response::Denied {
+                reason: "write access denied".into(),
+            }),
+            RuleVerdict::Allow | RuleVerdict::Prompt => Ok(()),
         }
     }
 

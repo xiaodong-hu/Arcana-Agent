@@ -10,18 +10,30 @@ pub enum Request {
     Read { path: String },
     #[serde(rename = "write")]
     Write { path: String, content: String },
+    #[serde(rename = "write_confirmed")]
+    WriteConfirmed { path: String, content: String },
     #[serde(rename = "delete")]
     Delete { path: String },
+    #[serde(rename = "delete_confirmed")]
+    DeleteConfirmed { path: String },
     #[serde(rename = "rename")]
     Rename { src: String, dst: String },
+    #[serde(rename = "rename_confirmed")]
+    RenameConfirmed { src: String, dst: String },
     #[serde(rename = "query")]
     Query { path: String },
     #[serde(rename = "fetch")]
     Fetch { url: String, tag: Option<String> },
+    #[serde(rename = "fetch_confirmed")]
+    FetchConfirmed { url: String, tag: Option<String> },
     #[serde(rename = "exec")]
     Exec { cmd: String, args: Vec<String> },
+    #[serde(rename = "exec_confirmed")]
+    ExecConfirmed { cmd: String, args: Vec<String> },
     #[serde(rename = "exec_shell")]
     ExecShell { command: String },
+    #[serde(rename = "exec_shell_confirmed")]
+    ExecShellConfirmed { command: String },
     #[serde(rename = "register_tool")]
     RegisterTool {
         name: String,
@@ -29,12 +41,28 @@ pub enum Request {
         args: Vec<String>,
         description: String,
     },
+    #[serde(rename = "register_tool_confirmed")]
+    RegisterToolConfirmed {
+        name: String,
+        path: String,
+        args: Vec<String>,
+        description: String,
+    },
     #[serde(rename = "register_command")]
     RegisterCommand { pattern: String },
+    #[serde(rename = "register_command_confirmed")]
+    RegisterCommandConfirmed { pattern: String },
     #[serde(rename = "register_web")]
     RegisterWeb { domain: String },
+    #[serde(rename = "register_web_confirmed")]
+    RegisterWebConfirmed { domain: String },
     #[serde(rename = "register_filesystem")]
     RegisterFilesystem {
+        access: FilesystemAccess,
+        path: String,
+    },
+    #[serde(rename = "register_filesystem_confirmed")]
+    RegisterFilesystemConfirmed {
         access: FilesystemAccess,
         path: String,
     },
