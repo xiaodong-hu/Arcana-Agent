@@ -4,6 +4,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::theme::Theme;
 use crate::types::{Message, MessageRole, ThinkingBlock, ToolCall, ToolType};
 
+const TOOL_HINT: Color = Color::Rgb(160, 160, 170);
+const TOOL_OUTPUT: Color = Color::Rgb(185, 185, 195);
+const PIGMENT_GREEN: Color = Color::Rgb(0, 165, 80);
+
 /// Viewport state: manages scroll position and message rendering.
 #[derive(Debug)]
 pub struct Viewport {
@@ -124,7 +128,21 @@ impl Viewport {
 
     /// Finalize response and append usage stats line.
     pub fn finalize_response_with_stats(&mut self, stats: Option<crate::types::ResponseStats>) {
-        if !self.streaming_text.is_empty() || self.streaming_think.is_some() {
+        self.finalize_response_with_options(stats, false);
+    }
+
+    /// Finalize a response without stats and create an agent message even when
+    /// visible content was stripped, so tool-call panels have a stable anchor.
+    pub fn finalize_response_for_tool_calls(&mut self) {
+        self.finalize_response_with_options(None, true);
+    }
+
+    fn finalize_response_with_options(
+        &mut self,
+        stats: Option<crate::types::ResponseStats>,
+        force_agent_message: bool,
+    ) {
+        if force_agent_message || !self.streaming_text.is_empty() || self.streaming_think.is_some() {
             let thinking = self.streaming_think.take().map(|t| ThinkingBlock {
                 content: t.content.trim_end_matches('\n').to_string(),
                 token_count: t.token_count,
@@ -364,35 +382,36 @@ impl Viewport {
                             ToolType::Web => "Web",
                             ToolType::Other => "Tool",
                         };
-                        if tc.collapsed {
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::styled(format!("[Running]: {label} "), theme.tool_call),
-                                Span::styled("ctrl+x to expand", Style::default().fg(Color::Rgb(160, 160, 170))),
-                            ])));
-                            continue;
-                        }
-
                         let status = if tc.result.is_some() {
                             format!("finished in {:.1}s", tc.duration_ms as f64 / 1000.0)
                         } else {
                             "waiting".to_string()
                         };
-                        lines.push((msg_idx, Line::from(vec![
-                            Span::styled("[Running]: ", theme.tool_call),
-                            Span::styled(format!("{label} ({status}) "), theme.tool_call),
-                            Span::styled("ctrl+x to fold", Style::default().fg(Color::Rgb(160, 160, 170))),
-                        ])));
-                        for line in tc.description.lines() {
+                        if tc.collapsed {
                             lines.push((msg_idx, Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line.to_string(), theme.agent_response),
+                                Span::styled("[Arcana Run]: ", Style::default().fg(PIGMENT_GREEN).add_modifier(Modifier::BOLD)),
+                                Span::styled(format!("{label} ({status}) "), Style::default().fg(PIGMENT_GREEN)),
+                                Span::styled("ctrl+x to expand", Style::default().fg(TOOL_HINT)),
                             ])));
+                            continue;
+                        }
+
+                        lines.push((msg_idx, Line::from(vec![
+                            Span::styled("[Arcana Run]: ", Style::default().fg(PIGMENT_GREEN).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("{label} ({status}) "), Style::default().fg(PIGMENT_GREEN)),
+                            Span::styled("ctrl+x to fold", Style::default().fg(TOOL_HINT)),
+                        ])));
+                        for line in render_tool_command_lines(tc, theme) {
+                            lines.push((msg_idx, line));
                         }
                         if let Some(result) = &tc.result {
+                            if !result.is_empty() {
+                                lines.push((msg_idx, Line::from("")));
+                            }
                             for line in result.lines() {
                                 lines.push((msg_idx, Line::from(vec![
                                     Span::raw("  "),
-                                    Span::styled(line.to_string(), theme.tool_call),
+                                    Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
                                 ])));
                             }
                         }
@@ -589,6 +608,36 @@ impl Viewport {
         let paragraph = Paragraph::new(visible_lines);
         frame.render_widget(paragraph, inner);
     }
+}
+
+fn render_tool_command_lines<'a>(tool_call: &ToolCall, theme: &Theme) -> Vec<Line<'a>> {
+    if tool_call.tool_type != ToolType::Shell {
+        return tool_call
+            .description
+            .lines()
+            .map(|line| {
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(line.to_string(), theme.agent_response),
+                ])
+            })
+            .collect();
+    }
+
+    crate::highlight::highlight_lines(&tool_call.description, "bash")
+        .into_iter()
+        .map(|spans| {
+            let mut line_spans = vec![Span::raw("  ")];
+            if spans.is_empty() {
+                line_spans.push(Span::raw(""));
+            } else {
+                line_spans.extend(spans.into_iter().map(|span| {
+                    Span::styled(span.text, Style::default().fg(span.fg))
+                }));
+            }
+            Line::from(line_spans)
+        })
+        .collect()
 }
 
 /// Linearly interpolate between two RGB colors.

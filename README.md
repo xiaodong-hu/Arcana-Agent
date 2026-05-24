@@ -135,7 +135,7 @@ The authority program reads the human-maintained authority instruction and auto-
 - the loaded project-level `.arcana/authority.toml` when present,
 - the merged machine-readable authority snapshot.
 
-Agents interact with authority by emitting JSONL requests. Arcana-Agent detects those request lines, asks the human to approve/edit/abort privileged operations in the TUI, relays approved requests to the session authority socket, shows stdout/stderr in an embedded tool-call panel, and returns the JSON responses to the model:
+Agents interact with authority by emitting JSONL requests. Arcana-Agent detects those request lines, asks the human to approve/edit/abort privileged operations in the TUI, relays approved requests to the session authority socket, shows terminal-like command output in an embedded `[Arcana Run]` panel, and returns the JSON responses to the model:
 
 ```bash
 # View the instruction text:
@@ -363,7 +363,7 @@ arcana resume --last            # Resume previous session
 | `Ctrl+e` | Open `$EDITOR` for prompt editing |
 | `Ctrl+b` | Stop LLM generation immediately |
 | `Ctrl+o` | Toggle thinking chain expand/collapse |
-| `Ctrl+x` | Toggle tool-call panel expand/collapse |
+| `Ctrl+x` | Toggle `[Arcana Run]` panel expand/collapse |
 | `Ctrl+j` / `Ctrl+k` | Scroll viewport down/up |
 | `Ctrl+Enter` | Newline in composer (also `Shift+Enter`) |
 | `Ctrl+w` | Delete word left |

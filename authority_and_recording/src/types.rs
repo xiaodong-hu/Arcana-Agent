@@ -8,10 +8,16 @@ use std::collections::HashMap;
 pub enum Request {
     #[serde(rename = "read")]
     Read { path: String },
+    #[serde(rename = "read_text")]
+    ReadText { path: String },
     #[serde(rename = "write")]
     Write { path: String, content: String },
+    #[serde(rename = "write_text")]
+    WriteText { path: String, content: String },
     #[serde(rename = "write_confirmed")]
     WriteConfirmed { path: String, content: String },
+    #[serde(rename = "write_text_confirmed")]
+    WriteTextConfirmed { path: String, content: String },
     #[serde(rename = "delete")]
     Delete { path: String },
     #[serde(rename = "delete_confirmed")]
@@ -85,6 +91,8 @@ pub enum Response {
     Permission { level: AccessLevel },
     #[serde(rename = "content")]
     Content { data: String },
+    #[serde(rename = "text")]
+    Text { text: String },
     #[serde(rename = "fetched")]
     Fetched { path: String, bytes: u64 },
     #[serde(rename = "exec_result")]

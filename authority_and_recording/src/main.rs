@@ -15,7 +15,7 @@ fn main() {
     if args.len() >= 3 && args[1] == "auth" && args[2] == "instruction" {
         match prompt::load_or_create_instruction() {
             Ok(content) => print!("{}", content),
-            Err(e) => { eprintln!("[arcana] Error: {}", e); process::exit(1); }
+            Err(e) => { eprintln!("[Arcana] Error: {}", e); process::exit(1); }
         }
         return;
     }
@@ -26,7 +26,7 @@ fn main() {
             .unwrap_or_else(|| env::current_dir().expect("cannot get cwd"));
         match run_prompt(&root) {
             Ok(content) => print!("{}", content),
-            Err(e) => { eprintln!("[arcana] Error: {}", e); process::exit(1); }
+            Err(e) => { eprintln!("[Arcana] Error: {}", e); process::exit(1); }
         }
         return;
     }
@@ -36,19 +36,19 @@ fn main() {
         .unwrap_or_else(|| env::current_dir().expect("cannot get cwd"));
 
     if !project_root.is_dir() {
-        eprintln!("[arcana] Error: {:?} is not a directory", project_root);
+        eprintln!("[Arcana] Error: {:?} is not a directory", project_root);
         process::exit(1);
     }
 
-    eprintln!("[arcana] Authority & Record starting for {:?}", project_root);
+    eprintln!("[Arcana] Authority & Record starting for {:?}", project_root);
 
     let mut srv = match server::Server::new(project_root) {
         Ok(s) => s,
-        Err(e) => { eprintln!("[arcana] Failed to start: {}", e); process::exit(1); }
+        Err(e) => { eprintln!("[Arcana] Failed to start: {}", e); process::exit(1); }
     };
 
     if let Err(e) = srv.run() {
-        eprintln!("[arcana] Server error: {}", e);
+        eprintln!("[Arcana] Server error: {}", e);
         process::exit(1);
     }
 }

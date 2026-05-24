@@ -1,59 +1,40 @@
 use std::path::PathBuf;
 
-const DEFAULT_INSTRUCTION: &str = r#"# Interface for `Arcana Authority System (AAS)`
+const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority System (AAS)
 
-`Arcana Authority System` is used for every filesystem mutation, command
-execution, network request, and runtime authority change. Ask AAS when
-permission is unclear.
+Use AAS for command execution, filesystem access, web access, and authority
+registration. To call AAS, output one JSON object per line with an `op` field
+and no markdown wrapper. Arcana-Agent will ask the human when approval is
+needed, run approved requests, return JSON responses, and then you continue
+from those results.
 
-Communicate with the authority process through the Arcana-Agent AAS bridge by
-emitting one JSON object per line. Arcana-Agent relays each request to the
-session IPC channel and returns one JSON object per line back to you.
-The request schema is exactly `{"op":"..."}`. Do not use wrapper schemas such as
-`{"command":"run_terminal_cmd","params":...}`.
-
-## Discovery
+## Common Operations
 ```json
-{"op":"instruction"}
 {"op":"list_authority"}
 {"op":"query","path":"README.md"}
-{"op":"prompt"}
-```
-
-## Operations
-```json
-{"op":"read","path":"README.md"}
-{"op":"write","path":"notes.md","content":"<base64-bytes>"}
-{"op":"delete","path":"notes.md"}
-{"op":"rename","src":"old.md","dst":"new.md"}
-{"op":"exec","cmd":"cargo","args":["test"]}
+{"op":"read_text","path":"README.md"}
+{"op":"write_text","path":"notes.md","content":"plain UTF-8 text"}
 {"op":"exec_shell","command":"cargo test --all"}
 {"op":"fetch","url":"https://example.com","tag":null}
 ```
 
-## Registration
+Use `read_text` and `write_text` for normal text files. Use byte-level
+`read`/`write` with base64 content only when exact binary bytes are required.
+
+## Other Operations
 ```json
-{"op":"register_tool","name":"tool-name","path":"binary-or-script","args":[],"description":"what it does"}
+{"op":"delete","path":"notes.md"}
+{"op":"rename","src":"old.md","dst":"new.md"}
+{"op":"exec","cmd":"cargo","args":["test"]}
 {"op":"register_command","pattern":"cargo test --all"}
 {"op":"register_web","domain":"example.com"}
 {"op":"register_filesystem","access":"writable","path":"generated/**"}
 ```
 
-`read` returns base64 file content. `write` requires base64 file content. If a
-request returns `{"status":"aborted","error_type":"..."}`, report that error to
-the user and stop the current operation. Do not retry or route around AAS.
-
-When you need AAS to do work, output only the JSON request lines first. Do not
-wrap them in markdown. After Arcana-Agent returns AAS responses, continue the
-user task from those results.
-
-## Work Rule
-Always try your best to use any available combination of AAS tools, commands,
-filesystem authority, and network authority that can materially improve the
-answer to the user's request. Do the work through AAS first, then answer from
-the returned results. For temporary scripts, use `.arcana/tmp/`. For persistent
-project files, prefer `write` so AAS records the mutation. If AAS denies or
-aborts an operation, report that response and stop that operation.
+Always try to use available AAS tools and authorities when they materially
+improve the answer. For temporary scripts, use `.arcana/tmp/`. If AAS returns
+`{"status":"aborted",...}` or `{"status":"denied",...}`, report it and stop
+that operation. Do not retry or route around AAS.
 "#;
 
 pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {

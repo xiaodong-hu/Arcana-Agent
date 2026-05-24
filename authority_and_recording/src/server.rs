@@ -39,7 +39,7 @@ impl Server {
         // Generate authorized_prompt.md on startup
         let prompt_content = prompt::generate_prompt(&authority)?;
         fs::write(&prompt_path, &prompt_content)?;
-        eprintln!("[arcana] Generated {:?}", prompt_path);
+        eprintln!("[Arcana] Generated {:?}", prompt_path);
 
         Ok(Self {
             socket_path,
@@ -53,15 +53,15 @@ impl Server {
 
     pub fn run(&mut self) -> io::Result<()> {
         let listener = UnixListener::bind(&self.socket_path)?;
-        eprintln!("[arcana] Listening on {:?}", self.socket_path);
+        eprintln!("[Arcana] Listening on {:?}", self.socket_path);
         for stream in listener.incoming() {
             match stream {
                 Ok(s) => {
                     if let Err(e) = self.handle_connection(s) {
-                        eprintln!("[arcana] Error: {}", e);
+                        eprintln!("[Arcana] Error: {}", e);
                     }
                 }
-                Err(e) => eprintln!("[arcana] Accept error: {}", e),
+                Err(e) => eprintln!("[Arcana] Accept error: {}", e),
             }
         }
         Ok(())
@@ -96,9 +96,14 @@ impl Server {
     fn handle_request(&mut self, req: Request) -> io::Result<Response> {
         match req {
             Request::Read { path } => self.handle_read(&path),
+            Request::ReadText { path } => self.handle_read_text(&path),
             Request::Write { path, content } => self.handle_write(&path, &content),
+            Request::WriteText { path, content } => self.handle_write_text(&path, &content),
             Request::WriteConfirmed { path, content } => {
                 self.handle_write_confirmed(&path, &content)
+            }
+            Request::WriteTextConfirmed { path, content } => {
+                self.handle_write_text_confirmed(&path, &content)
             }
             Request::Delete { path } => self.handle_delete(&path),
             Request::DeleteConfirmed { path } => self.handle_delete_confirmed(&path),
@@ -161,11 +166,42 @@ impl Server {
         })
     }
 
+    fn handle_read_text(&self, path: &str) -> io::Result<Response> {
+        if let RuleVerdict::Deny = self.authority.check_read(path) {
+            return Ok(Response::Denied {
+                reason: "read access denied".into(),
+            });
+        }
+        let full_path = self.authority.resolve(path);
+        if !full_path.exists() {
+            return Ok(Response::Denied {
+                reason: "file not found".into(),
+            });
+        }
+        let bytes = fs::read(&full_path)?;
+        let text = match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => {
+                return Ok(Response::Denied {
+                    reason: "file is not valid UTF-8; use read for base64 bytes".into(),
+                });
+            }
+        };
+        Ok(Response::Text { text })
+    }
+
     fn handle_write(&mut self, path: &str, content_b64: &str) -> io::Result<Response> {
         if let Err(resp) = self.authorize_write(path) {
             return Ok(resp);
         }
         self.write_authorized(path, content_b64)
+    }
+
+    fn handle_write_text(&mut self, path: &str, content: &str) -> io::Result<Response> {
+        if let Err(resp) = self.authorize_write(path) {
+            return Ok(resp);
+        }
+        self.write_text_authorized(path, content)
     }
 
     fn handle_write_confirmed(&mut self, path: &str, content_b64: &str) -> io::Result<Response> {
@@ -175,13 +211,28 @@ impl Server {
         self.write_authorized(path, content_b64)
     }
 
+    fn handle_write_text_confirmed(&mut self, path: &str, content: &str) -> io::Result<Response> {
+        if let Err(resp) = self.authorize_write_confirmed(path) {
+            return Ok(resp);
+        }
+        self.write_text_authorized(path, content)
+    }
+
     fn write_authorized(&mut self, path: &str, content_b64: &str) -> io::Result<Response> {
         let content = base64_decode(content_b64)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad base64"))?;
 
+        self.write_bytes_authorized(path, &content)
+    }
+
+    fn write_text_authorized(&mut self, path: &str, content: &str) -> io::Result<Response> {
+        self.write_bytes_authorized(path, content.as_bytes())
+    }
+
+    fn write_bytes_authorized(&mut self, path: &str, content: &[u8]) -> io::Result<Response> {
         let full_path = self.authority.resolve(path);
         let prev_blob = self.record.hash_file(&full_path)?;
-        let blob = self.record.store_blob(&content)?;
+        let blob = self.record.store_blob(content)?;
         self.record
             .append("write", path, Some(blob), prev_blob, None)?;
 
@@ -303,16 +354,16 @@ impl Server {
             // Try curl first (most robust), then wget, then w3m -dump.
             let fetched = try_curl_fetch(url, &cache_file)
                 .or_else(|e| {
-                    eprintln!("[arcana] curl failed for {url}: {e}; trying wget...");
+                    eprintln!("[Arcana] curl failed for {url}: {e}; trying wget...");
                     try_wget_fetch(url, &cache_file)
                 })
                 .or_else(|e| {
-                    eprintln!("[arcana] wget failed for {url}: {e}; trying w3m -dump...");
+                    eprintln!("[Arcana] wget failed for {url}: {e}; trying w3m -dump...");
                     try_w3m_fetch(url, &cache_file)
                 });
 
             if let Err(e) = fetched {
-                eprintln!("[arcana] All fetch methods failed for {url}: {e}");
+                eprintln!("[Arcana] All fetch methods failed for {url}: {e}");
                 return Ok(Response::Denied {
                     reason: format!("fetch failed: {e}"),
                 });
@@ -470,7 +521,7 @@ impl Server {
         } else {
             format!("{} {}", path, args.join(" "))
         };
-        eprintln!("[arcana] Tool registration requested: {name} ({description})");
+        eprintln!("[Arcana] Tool registration requested: {name} ({description})");
         let approved_pattern = match self.authority.editable_approval(
             "Tool Registration",
             &command_pattern,
@@ -852,7 +903,7 @@ fn try_w3m_fetch(url: &str, out_path: &PathBuf) -> Result<(), String> {
     if !output.stderr.is_empty() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !stderr.trim().is_empty() {
-            eprintln!("[arcana] w3m stderr for {url}: {stderr}");
+            eprintln!("[Arcana] w3m stderr for {url}: {stderr}");
         }
     }
     Err("w3m: fetch failed".into())

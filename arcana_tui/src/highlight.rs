@@ -73,6 +73,24 @@ pub fn detect_language(path: &str) -> Option<&'static str> {
     }
 }
 
+/// Normalize Markdown fence language names to tree-sitter grammars that are
+/// currently compiled into Arcana.
+pub fn normalize_language(lang: &str) -> Option<&'static str> {
+    let lang = lang.trim().trim_start_matches('.').to_ascii_lowercase();
+    let lang = lang.split_whitespace().next().unwrap_or("");
+    match lang {
+        "rs" | "rust" => Some("rust"),
+        "py" | "pyi" | "python" | "python3" => Some("python"),
+        "js" | "mjs" | "cjs" | "jsx" | "javascript" => Some("javascript"),
+        "ts" | "mts" | "cts" | "typescript" => Some("typescript"),
+        "tsx" => Some("tsx"),
+        "toml" => Some("toml"),
+        "json" | "jsonc" => Some("json"),
+        "sh" | "bash" | "zsh" | "shell" => Some("bash"),
+        _ => None,
+    }
+}
+
 /// Build a HighlightConfiguration for the given language name.
 fn build_config(lang: &str) -> Option<HighlightConfiguration> {
     let mut config = match lang {

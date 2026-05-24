@@ -5,59 +5,41 @@ use std::path::PathBuf;
 
 use crate::authority::Authority;
 
-const DEFAULT_INSTRUCTION: &str = r#"# Interface for `Arcana Authority System (AAS)`
-`Arcana Authority System` is used for every filesystem mutation, command execution, network request, and runtime tool change. Ask AAS when permission is unclear.
+const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority System (AAS)
 
-Communicate with the authority process through the Arcana-Agent AAS bridge by emitting one JSON object per line. Arcana-Agent relays each request to the session IPC channel and returns one JSON object per line back to you.
-The request schema is exactly `{"op":"..."}`. Do not use wrapper schemas such as `{"command":"run_terminal_cmd","params":...}`.
+Use AAS for command execution, filesystem access, web access, and authority
+registration. To call AAS, output one JSON object per line with an `op` field
+and no markdown wrapper. Arcana-Agent will ask the human when approval is
+needed, run approved requests, return JSON responses, and then you continue
+from those results.
 
-## Discovery
+## Common Operations
 ```json
-{"op":"instruction"}
 {"op":"list_authority"}
 {"op":"query","path":"README.md"}
-{"op":"prompt"}
+{"op":"read_text","path":"README.md"}
+{"op":"write_text","path":"notes.md","content":"plain UTF-8 text"}
+{"op":"exec_shell","command":"cargo test --all"}
+{"op":"fetch","url":"https://example.com","tag":null}
 ```
 
-## Operations
+Use `read_text` and `write_text` for normal text files. Use byte-level
+`read`/`write` with base64 content only when exact binary bytes are required.
+
+## Other Operations
 ```json
-{"op":"read","path":"README.md"}
-{"op":"write","path":"notes.md","content":"<base64-bytes>"}
 {"op":"delete","path":"notes.md"}
 {"op":"rename","src":"old.md","dst":"new.md"}
 {"op":"exec","cmd":"cargo","args":["test"]}
-{"op":"exec_shell","command":"cargo test\ncargo clippy"}
-{"op":"fetch","url":"https://example.com","tag":null}
-{"op":"register_tool","name":"tool-name","path":"binary-or-script","args":[],"description":"what it does"}
-{"op":"register_command","pattern":"cargo test"}
+{"op":"register_command","pattern":"cargo test --all"}
 {"op":"register_web","domain":"example.com"}
-{"op":"register_filesystem","access":"writable","path":"src/**"}
+{"op":"register_filesystem","access":"writable","path":"generated/**"}
 ```
 
-`read` returns base64 file content. `write` requires base64 file content. `fetch` returns the project cache path and byte length; request `read` on that cache path if page content is needed. `exec_shell` is for multi-line executable command strings and always asks the human to approve, edit, or abort before execution.
-
-Registration requests write approved entries to the project-level authority policy. Use registration only when an operation is not already allowed or denied by the supplied authority policies.
-
-When you need AAS to do work, output only the JSON request lines first. Do not wrap them in markdown. After Arcana-Agent returns AAS responses, continue the user task from those results.
-
-## Work Rule
-Always try your best to use any available combination of AAS tools, commands,
-filesystem authority, and network authority that can materially improve the
-answer to the user's request. Do the work through AAS first, then answer from
-the returned results. For temporary scripts, use `.arcana/tmp/`. For persistent
-project files, prefer `write` so AAS records the mutation. If AAS denies or
-aborts an operation, report that response and stop that operation.
-
-## Abort Responses
-If AAS returns `{"status":"aborted","error_type":"...","message":"..."}`, immediately report that error to the user and stop generation. Do not retry the same operation unless the user explicitly asks.
-
-Known abort error types:
-- `ToolCallAbortError`
-- `FileAccessAbortError`
-- `WebAccessAbortError`
-- `ToolRegistrationAbortError`
-- `FileAccessRegistrationAbortError`
-- `WebAccessRegistrationAbortError`
+Always try to use available AAS tools and authorities when they materially
+improve the answer. For temporary scripts, use `.arcana/tmp/`. If AAS returns
+`{"status":"aborted",...}` or `{"status":"denied",...}`, report it and stop
+that operation. Do not retry or route around AAS.
 "#;
 
 pub fn load_or_create_instruction() -> io::Result<String> {
@@ -87,8 +69,8 @@ pub fn generate_prompt(authority: &Authority) -> io::Result<String> {
     let mut out = String::new();
     out.push_str(instruction.trim_end());
     out.push_str("\n\n## Session Authority Channel\n\n");
-    out.push_str("Send JSONL requests to the Unix socket `.arcana/authority.sock`.\n");
-    out.push_str("Use `instruction` to reload this interface and `list_authority` to reload current policy.\n");
+    out.push_str("Emit AAS JSONL requests in your response; Arcana-Agent relays them to AAS.\n");
+    out.push_str("Use `{\"op\":\"instruction\"}` to reload this interface and `{\"op\":\"list_authority\"}` to reload current policy.\n");
 
     out.push_str("\n## System-Wide Authority Policy\n\n```toml\n");
     match snapshot.configs.system_toml.as_deref() {

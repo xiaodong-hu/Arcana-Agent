@@ -219,7 +219,7 @@ A multi-line text input area at the bottom of the screen.
 | `Ctrl+C` | Clear input |
 | `Ctrl+B` | Stop LLM generation |
 | `Ctrl+O` | Toggle thinking chain expand/collapse (works during streaming) |
-| `Ctrl+X` | Toggle tool-call panel expand/collapse |
+| `Ctrl+X` | Toggle `[Arcana Run]` panel expand/collapse |
 | `Ctrl+/` | Toggle query sub-agent overlay |
 | `Ctrl+E` / `Ctrl+G` | Open `$EDITOR` for prompt editing |
 | `Ctrl+J` / `Ctrl+K` | Scroll viewport down/up (3 lines) |
