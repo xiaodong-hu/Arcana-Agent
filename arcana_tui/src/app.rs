@@ -878,6 +878,68 @@ Hotkeys:\n\
                         msg["reasoning_content"] = serde_json::json!(thinking);
                     }
                     conversation.push(msg);
+
+                    let authority_requests = extract_authority_json_requests(&response_text);
+                    if !authority_requests.is_empty() {
+                        app.viewport.messages.push(Message {
+                            role: MessageRole::System,
+                            content: format!(
+                                "[AAS Bridge]\nRelaying {} request(s) to authority.",
+                                authority_requests.len()
+                            ),
+                            timestamp: chrono::Utc::now(),
+                            thinking: None,
+                            tool_calls: Vec::new(),
+                        });
+
+                        let socket_path = Path::new(".arcana/authority.sock");
+                        let mut responses = Vec::new();
+                        for request in authority_requests {
+                            let response = if socket_path.exists() {
+                                match authority_request(socket_path, request.clone()) {
+                                    Ok(response) => response,
+                                    Err(e) => serde_json::json!({
+                                        "status": "denied",
+                                        "reason": format!("AAS bridge failed: {e}")
+                                    }),
+                                }
+                            } else {
+                                serde_json::json!({
+                                    "status": "denied",
+                                    "reason": "AAS bridge failed: .arcana/authority.sock not found"
+                                })
+                            };
+                            app.viewport.messages.push(Message {
+                                role: MessageRole::System,
+                                content: format!("[AAS] {} -> {}", request, response),
+                                timestamp: chrono::Utc::now(),
+                                thinking: None,
+                                tool_calls: Vec::new(),
+                            });
+                            responses.push(response);
+                        }
+
+                        let response_text = responses
+                            .into_iter()
+                            .map(|response| response.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        conversation.push(serde_json::json!({
+                            "role": "user",
+                            "content": format!("AAS returned these JSON responses, one per line:\n{response_text}\n\nContinue the task using these results. If a response is denied or aborted, report it and stop that operation.")
+                        }));
+
+                        app.viewport.is_streaming = true;
+                        app.generation_broken = false;
+                        app.stream_started_at = Some(chrono::Utc::now());
+                        app.stream_handle = Some(crate::llm::spawn_stream(
+                            &config,
+                            conversation.clone(),
+                            event_tx.clone(),
+                        ));
+                        continue;
+                    }
+
                     app.stream_handle = None;
                 }
                 AppEvent::LlmError(err) => {
@@ -1610,8 +1672,8 @@ fn extract_authority_json_requests(content: &str) -> Vec<serde_json::Value> {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
                     if let Ok(value) = serde_json::from_str::<serde_json::Value>(&candidate) {
-                        if value.get("op").and_then(|op| op.as_str()).is_some() {
-                            requests.push(value);
+                        if let Some(request) = normalize_authority_request(value) {
+                            requests.push(request);
                         }
                     }
                     candidate.clear();
@@ -1624,6 +1686,43 @@ fn extract_authority_json_requests(content: &str) -> Vec<serde_json::Value> {
     }
 
     requests
+}
+
+fn normalize_authority_request(value: serde_json::Value) -> Option<serde_json::Value> {
+    if value.get("op").and_then(|op| op.as_str()).is_some() {
+        return Some(value);
+    }
+
+    let command = value.get("command").and_then(|command| command.as_str())?;
+    let params = value.get("params")?;
+    match command {
+        "run_terminal_cmd" => {
+            let cmd = params.get("cmd").and_then(|cmd| cmd.as_str())?;
+            Some(serde_json::json!({"op": "exec_shell", "command": cmd}))
+        }
+        "read_file" => {
+            let path = params.get("path").and_then(|path| path.as_str())?;
+            Some(serde_json::json!({"op": "read", "path": path}))
+        }
+        "write_file" => {
+            let path = params.get("path").and_then(|path| path.as_str())?;
+            let content = params.get("content").and_then(|content| content.as_str())?;
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            Some(serde_json::json!({
+                "op": "write",
+                "path": path,
+                "content": STANDARD.encode(content.as_bytes())
+            }))
+        }
+        "browser" | "fetch" => {
+            let url = params
+                .get("url")
+                .or_else(|| params.get("website"))
+                .and_then(|url| url.as_str())?;
+            Some(serde_json::json!({"op": "fetch", "url": url, "tag": null}))
+        }
+        _ => None,
+    }
 }
 
 fn extract_urls(text: &str) -> Vec<String> {

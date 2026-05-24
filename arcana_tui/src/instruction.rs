@@ -9,6 +9,8 @@ permission is unclear.
 Communicate with the authority process through the Arcana-Agent AAS bridge by
 emitting one JSON object per line. Arcana-Agent relays each request to the
 session IPC channel and returns one JSON object per line back to you.
+The request schema is exactly `{"op":"..."}`. Do not use wrapper schemas such as
+`{"command":"run_terminal_cmd","params":...}`.
 
 ## Discovery
 ```json
