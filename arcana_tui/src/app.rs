@@ -596,10 +596,14 @@ pub async fn interactive(
   \\usage         Session token/cost stats\n\
   \\working_dir   Show current working directory\n\
   \\check         System health check\n\
-  \\auth list     Show authorized commands\n\
-  \\auth add      Add command to allow list\n\
-  \\auth remove   Remove from allow list\n\
-  \\auth edit     Open authority.toml in $EDITOR\n\
+  \\config list   Show config.toml\n\
+  \\config edit   Open config.toml in $EDITOR\n\
+  \\authorization list     Show authorized commands\n\
+  \\authorization add      Add command to allow list\n\
+  \\authorization remove   Remove from allow list\n\
+  \\authorization edit     Open authority.toml in $EDITOR\n\
+  \\instruction show       Show INSTRUCTION.md\n\
+  \\instruction edit       Open INSTRUCTION.md in $EDITOR\n\
 \n\
 Hotkeys:\n\
   Ctrl+e         Open $EDITOR for prompt\n\
@@ -646,7 +650,49 @@ Hotkeys:\n\
                                             "Working directory:\n  {cwd}\n\nWorkspace:\n  {cwd}/.arcana/"
                                         ));
                                     }
-                                    "\\auth" | "\\auth list" => {
+                                    "\\config" | "\\config list" => {
+                                        let path = Config::path()?;
+                                        if !path.exists() {
+                                            Config::default().save()?;
+                                        }
+                                        let content = std::fs::read_to_string(&path)?;
+                                        app.viewport.add_error_message(format!(
+                                            "Config file: {}\n\n{}",
+                                            path.display(),
+                                            content
+                                        ));
+                                    }
+                                    "\\config edit" => {
+                                        let path = Config::path()?;
+                                        if !path.exists() {
+                                            Config::default().save()?;
+                                        }
+                                        let editor = config.editor.command.clone();
+                                        event_handle.abort();
+                                        tui.suspend()?;
+                                        let _ =
+                                            std::process::Command::new(&editor).arg(&path).status();
+                                        tui.resume()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+                                        match Config::load() {
+                                            Ok(new_config) => {
+                                                config = new_config;
+                                                app.status.model_name =
+                                                    config.agents.main.model.clone();
+                                                app.viewport.add_error_message(format!(
+                                                    "Config reloaded from {}",
+                                                    path.display()
+                                                ));
+                                            }
+                                            Err(e) => app.viewport.add_error_message(format!(
+                                                "Config edit saved, but reload failed: {e}"
+                                            )),
+                                        }
+                                    }
+                                    "\\authorization" | "\\authorization list" => {
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -665,9 +711,9 @@ Hotkeys:\n\
                                             );
                                         }
                                     }
-                                    cmd if cmd.starts_with("\\auth add ") => {
+                                    cmd if cmd.starts_with("\\authorization add ") => {
                                         let pattern =
-                                            cmd.strip_prefix("\\auth add ").unwrap().trim();
+                                            cmd.strip_prefix("\\authorization add ").unwrap().trim();
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -684,9 +730,11 @@ Hotkeys:\n\
                                             ));
                                         }
                                     }
-                                    cmd if cmd.starts_with("\\auth remove ") => {
-                                        let pattern =
-                                            cmd.strip_prefix("\\auth remove ").unwrap().trim();
+                                    cmd if cmd.starts_with("\\authorization remove ") => {
+                                        let pattern = cmd
+                                            .strip_prefix("\\authorization remove ")
+                                            .unwrap()
+                                            .trim();
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -700,7 +748,7 @@ Hotkeys:\n\
                                             ));
                                         }
                                     }
-                                    "\\auth edit" => {
+                                    "\\authorization edit" => {
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -720,6 +768,45 @@ Hotkeys:\n\
                                         app.composer.clear();
                                         app.viewport.add_error_message(format!(
                                             "Authority config reloaded from {}",
+                                            path.display()
+                                        ));
+                                    }
+                                    "\\instruction" | "\\instruction show" => {
+                                        match crate::instruction::load_or_create() {
+                                            Ok(content) => {
+                                                let path = crate::instruction::path()?;
+                                                app.viewport.add_error_message(format!(
+                                                    "Instruction file: {}\n\n{}",
+                                                    path.display(),
+                                                    content
+                                                ));
+                                            }
+                                            Err(e) => app.viewport.add_error_message(format!(
+                                                "Cannot load instruction: {e}"
+                                            )),
+                                        }
+                                    }
+                                    "\\instruction edit" => {
+                                        let _ = crate::instruction::load_or_create()?;
+                                        let path = crate::instruction::path()?;
+                                        let editor = config.editor.command.clone();
+                                        event_handle.abort();
+                                        tui.suspend()?;
+                                        let _ =
+                                            std::process::Command::new(&editor).arg(&path).status();
+                                        tui.resume()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+
+                                        refresh_authorized_prompt_file();
+                                        conversation[0] = serde_json::json!({
+                                            "role": "system",
+                                            "content": system_prompt_with_authority()
+                                        });
+                                        app.viewport.add_error_message(format!(
+                                            "Instruction reloaded from {}",
                                             path.display()
                                         ));
                                     }
@@ -744,6 +831,18 @@ Hotkeys:\n\
                                             "✓ SOUL.md"
                                         } else {
                                             "✗ SOUL.md (missing)"
+                                        });
+                                        let user = home.join("USER.md");
+                                        lines.push(if user.exists() {
+                                            "✓ USER.md"
+                                        } else {
+                                            "✗ USER.md (missing)"
+                                        });
+                                        let instruction = home.join("INSTRUCTION.md");
+                                        lines.push(if instruction.exists() {
+                                            "✓ INSTRUCTION.md"
+                                        } else {
+                                            "✗ INSTRUCTION.md (missing)"
                                         });
                                         let key_ok = std::env::var("DEEPSEEK_API_KEY").is_ok();
                                         lines.push(if key_ok {
@@ -1336,6 +1435,23 @@ fn system_prompt_with_authority() -> String {
         Ok(prompt) => format!("{}\n\n{}", prompt.trim_end(), base),
         Err(_) => base.to_string(),
     }
+}
+
+fn refresh_authorized_prompt_file() {
+    let socket_path = Path::new(".arcana/authority.sock");
+    if !socket_path.exists() {
+        return;
+    }
+    let Ok(response) = authority_request(socket_path, serde_json::json!({"op": "prompt"})) else {
+        return;
+    };
+    let Some(content) = response.get("content").and_then(|content| content.as_str()) else {
+        return;
+    };
+    if let Some(parent) = Path::new(".arcana/authorized_prompt.md").parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(".arcana/authorized_prompt.md", content);
 }
 
 async fn authority_context_for_query(query: &str, _config: &Config) -> String {

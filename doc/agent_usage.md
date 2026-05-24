@@ -428,11 +428,14 @@ These are available inside the interactive TUI session (typed in the composer):
 | `\status` | Show model/token info |
 | `\usage` | Session token/cost statistics |
 | `\check` | System health check |
-| `\auth list` | Show authorized commands |
-| `\auth instruction` | Show `~/.arcana/INSTRUCTION.md` |
-| `\auth add <cmd>` | Add command to allow list |
-| `\auth remove <cmd>` | Remove command from allow list |
-| `\auth edit` | Open `~/.arcana/authority.toml` in `$EDITOR` |
+| `\config list` | Show `~/.arcana/config.toml` |
+| `\config edit` | Open `~/.arcana/config.toml` in `$EDITOR` |
+| `\authorization list` | Show authorized commands |
+| `\authorization add <cmd>` | Add command to allow list |
+| `\authorization remove <cmd>` | Remove command from allow list |
+| `\authorization edit` | Open `~/.arcana/authority.toml` in `$EDITOR` |
+| `\instruction show` | Show `~/.arcana/INSTRUCTION.md` |
+| `\instruction edit` | Open `~/.arcana/INSTRUCTION.md` in `$EDITOR` |
 
 ---
 

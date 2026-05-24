@@ -13,10 +13,14 @@ pub const ALL_COMMANDS: &[&str] = &[
     "\\usage",
     "\\working_dir",
     "\\check",
-    "\\auth list",
-    "\\auth add ",
-    "\\auth remove ",
-    "\\auth edit",
+    "\\config list",
+    "\\config edit",
+    "\\authorization list",
+    "\\authorization add ",
+    "\\authorization remove ",
+    "\\authorization edit",
+    "\\instruction show",
+    "\\instruction edit",
 ];
 
 /// The input composer at the bottom of the screen.
@@ -419,9 +423,9 @@ impl Composer {
             let w = UnicodeWidthStr::width(*line);
             visual_lines += ((w / avail_w) + 1) as u16;
         }
-        // Command list shown when input is exactly "\" (with or without selection mode)
-        let cmd_list_lines: u16 = if !self.overlay_mode && self.input == "\\" {
-            ALL_COMMANDS.len() as u16 + 1 // +1 for the blank separator line
+        // Command list shown for slash-command browsing.
+        let cmd_list_lines: u16 = if !self.overlay_mode && should_show_command_list(&self.input) {
+            matching_commands(&self.input).len() as u16 + 1 // +1 for the blank separator line
         } else {
             0
         };
@@ -570,7 +574,7 @@ impl Composer {
                 if visual_lines.is_empty()
                     && in_slash_mode
                     && self.input.len() > 1
-                    && self.input.len() <= 7
+                    && self.input.len() <= 24
                 {
                     let hint = slash_hint(&self.input);
                     if !hint.is_empty() {
@@ -597,7 +601,7 @@ impl Composer {
         }
 
         // Vertical command list
-        if in_slash_mode && self.input == "\\" {
+        if in_slash_mode && should_show_command_list(&self.input) {
             let normal_fg = Color::Rgb(255, 165, 80);
             let selected_fg = Color::Rgb(255, 255, 100);
             let cursor_glyph = "❯ ";
@@ -605,7 +609,8 @@ impl Composer {
             // Blank separator line
             visual_lines.push(Line::from(Span::styled("", Style::default())));
 
-            for (i, cmd) in ALL_COMMANDS.iter().enumerate() {
+            let commands = matching_commands(&self.input);
+            for (i, cmd) in commands.iter().enumerate() {
                 let (prefix, fg) = if self.selection_mode && i == self.selection_index {
                     (cursor_glyph, selected_fg)
                 } else {
@@ -615,12 +620,12 @@ impl Composer {
                 if self.selection_mode && i == self.selection_index {
                     visual_lines.push(Line::from(vec![
                         Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
-                        Span::styled(*cmd, style.add_modifier(Modifier::BOLD)),
+                        Span::styled((*cmd).to_string(), style.add_modifier(Modifier::BOLD)),
                     ]));
                 } else {
                     visual_lines.push(Line::from(vec![
                         Span::styled(prefix, style),
-                        Span::styled(*cmd, style),
+                        Span::styled((*cmd).to_string(), style),
                     ]));
                 }
             }
@@ -667,12 +672,35 @@ fn slash_hint(input: &str) -> &'static str {
         "\\c" | "\\cl" | "\\cle" | "\\clea" | "\\clear" => " ← clear viewport",
         "\\s" | "\\st" | "\\sta" | "\\stat" | "\\statu" | "\\status" => " ← show status",
         "\\u" | "\\us" | "\\usa" | "\\usag" | "\\usage" => " ← session token/cost stats",
-        "\\au" | "\\aut" | "\\auth" => " list|add|remove|edit",
-        "\\auth l" | "\\auth li" | "\\auth lis" | "\\auth list" => " ← show authorized commands",
-        "\\auth a" | "\\auth ad" | "\\auth add" => " <command> ← add to allow list",
-        "\\auth r" | "\\auth re" | "\\auth rem" | "\\auth remo" | "\\auth remov"
-        | "\\auth remove" => " <command> ← remove from allow list",
-        "\\auth e" | "\\auth ed" | "\\auth edi" | "\\auth edit" => " ← open in $EDITOR",
+        "\\co" | "\\con" | "\\conf" | "\\confi" | "\\config" => " list|edit",
+        "\\config l" | "\\config li" | "\\config lis" | "\\config list" => {
+            " ← show config.toml"
+        }
+        "\\config e" | "\\config ed" | "\\config edi" | "\\config edit" => {
+            " ← open config.toml in $EDITOR"
+        }
+        "\\au" | "\\aut" | "\\auth" | "\\autho" | "\\author" | "\\authori"
+        | "\\authoriz" | "\\authoriza" | "\\authorizat" | "\\authorizati"
+        | "\\authorizatio" | "\\authorization" => " list|add|remove|edit",
+        "\\authorization l" | "\\authorization li" | "\\authorization lis"
+        | "\\authorization list" => " ← show authorized commands",
+        "\\authorization a" | "\\authorization ad" | "\\authorization add" => {
+            " <command> ← add to allow list"
+        }
+        "\\authorization r" | "\\authorization re" | "\\authorization rem"
+        | "\\authorization remo" | "\\authorization remov" | "\\authorization remove" => {
+            " <command> ← remove from allow list"
+        }
+        "\\authorization e" | "\\authorization ed" | "\\authorization edi"
+        | "\\authorization edit" => " ← open authority.toml in $EDITOR",
+        "\\in" | "\\ins" | "\\inst" | "\\instr" | "\\instru" | "\\instruc"
+        | "\\instruct" | "\\instructi" | "\\instructio" | "\\instruction" => {
+            " show|edit"
+        }
+        "\\instruction s" | "\\instruction sh" | "\\instruction sho"
+        | "\\instruction show" => " ← show INSTRUCTION.md",
+        "\\instruction e" | "\\instruction ed" | "\\instruction edi"
+        | "\\instruction edit" => " ← open INSTRUCTION.md in $EDITOR",
         "\\w" | "\\wo" | "\\wor" | "\\work" | "\\worki" | "\\workin" | "\\working" => {
             " ← show working directory"
         }
@@ -686,16 +714,93 @@ fn slash_hint(input: &str) -> &'static str {
 
 /// Autocomplete a partial command. Returns the full command if unambiguous.
 fn autocomplete_slash(input: &str) -> Option<String> {
-    if input == "\\" || input == "\\auth " {
+    if input == "\\" {
         return None; // too ambiguous
     }
-    let matches: Vec<&&str> = ALL_COMMANDS
-        .iter()
-        .filter(|c| c.starts_with(input))
-        .collect();
+    let normalized = match input {
+        "\\au" | "\\aut" | "\\auth" | "\\autho" | "\\author" | "\\authori"
+        | "\\authoriz" | "\\authoriza" | "\\authorizat" | "\\authorizati"
+        | "\\authorizatio" => "\\authorization",
+        "\\in" | "\\ins" | "\\inst" | "\\instr" | "\\instru" | "\\instruc"
+        | "\\instruct" | "\\instructi" | "\\instructio" => "\\instruction",
+        "\\co" | "\\con" | "\\conf" | "\\confi" => "\\config",
+        _ => input,
+    };
+    if normalized == "\\authorization" {
+        return Some("\\authorization ".to_string());
+    }
+    if normalized == "\\instruction" {
+        return Some("\\instruction ".to_string());
+    }
+    if normalized == "\\config" {
+        return Some("\\config ".to_string());
+    }
+
+    let matches: Vec<&&str> = ALL_COMMANDS.iter().filter(|c| c.starts_with(normalized)).collect();
     if matches.len() == 1 {
         Some(matches[0].to_string())
+    } else if matches.len() > 1 {
+        let prefix = common_prefix(matches.iter().map(|cmd| **cmd));
+        if prefix.len() > input.len() {
+            Some(prefix)
+        } else {
+            None
+        }
     } else {
         None
     }
+}
+
+fn should_show_command_list(input: &str) -> bool {
+    input == "\\" || (input.starts_with('\\') && !matching_commands(input).is_empty())
+}
+
+fn matching_commands(input: &str) -> Vec<&'static str> {
+    if input == "\\" {
+        return ALL_COMMANDS.to_vec();
+    }
+    let normalized = if input == "\\au" || input == "\\aut" {
+        "\\authorization".to_string()
+    } else if input.starts_with("\\auth") {
+        input.replacen("\\auth", "\\authorization", 1)
+    } else if matches!(
+        input,
+        "\\in"
+            | "\\ins"
+            | "\\inst"
+            | "\\instr"
+            | "\\instru"
+            | "\\instruc"
+            | "\\instruct"
+            | "\\instructi"
+            | "\\instructio"
+    ) {
+        "\\instruction".to_string()
+    } else if input == "\\co" || input == "\\con" || input == "\\conf" || input == "\\confi" {
+        "\\config".to_string()
+    } else {
+        input.to_string()
+    };
+    ALL_COMMANDS
+        .iter()
+        .copied()
+        .filter(|cmd| cmd.starts_with(&normalized))
+        .collect()
+}
+
+fn common_prefix<'a>(items: impl IntoIterator<Item = &'a str>) -> String {
+    let mut iter = items.into_iter();
+    let Some(first) = iter.next() else {
+        return String::new();
+    };
+    let mut prefix = first.to_string();
+    for item in iter {
+        while !item.starts_with(&prefix) {
+            if prefix.is_empty() {
+                return prefix;
+            }
+            prefix.pop();
+        }
+    }
+    prefix
 }

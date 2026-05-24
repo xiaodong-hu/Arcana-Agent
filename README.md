@@ -124,7 +124,7 @@ readonly = ["/etc", "/usr"]
 deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
 ```
 
-Runtime management: `\auth list|add|remove|edit`
+Runtime management: `\authorization list|add|remove|edit`
 
 #### LLM Authority Instruction
 
@@ -385,11 +385,14 @@ Type `\` then press `↓` to browse all commands with arrow keys. Press `Esc` to
 | `\usage` | Session token/cost statistics |
 | `\working_dir` | Show current working directory |
 | `\check` | System health check |
-| `\auth list` | Show authorized commands |
-| `\auth instruction` | Show `~/.arcana/INSTRUCTION.md` |
-| `\auth add <cmd>` | Add to allow list |
-| `\auth remove <cmd>` | Remove from allow list |
-| `\auth edit` | Open authority.toml in `$EDITOR` |
+| `\config list` | Show `~/.arcana/config.toml` |
+| `\config edit` | Open config.toml in `$EDITOR` |
+| `\authorization list` | Show authorized commands |
+| `\authorization add <cmd>` | Add to allow list |
+| `\authorization remove <cmd>` | Remove from allow list |
+| `\authorization edit` | Open authority.toml in `$EDITOR` |
+| `\instruction show` | Show `~/.arcana/INSTRUCTION.md` |
+| `\instruction edit` | Open INSTRUCTION.md in `$EDITOR` |
 | `\help` | Show all commands and hotkeys |
 
 ---
