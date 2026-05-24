@@ -78,6 +78,8 @@ The TUI (`arcana_tui`) reads `.arcana/authorized_prompt.md` and **mandatorily pr
 - What tools are available and how to invoke them.
 - What permissions it has (so it doesn't attempt denied operations).
 - That all operations go through the authority socket (not direct filesystem access).
+- That natural-language requests requiring code execution, file access, web access,
+  or external commands should be translated into AAS JSON requests first.
 
 
 #### Config (`~/.arcana/authority.toml` and `.arcana/authority.toml`)

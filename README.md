@@ -155,6 +155,8 @@ arcana auth instruction
 
 Unlisted operations can be approved, edited, or aborted by the human. Abort responses are typed, for example `ToolCallAbortError`, `WebAccessAbortError`, and `FileAccessRegistrationAbortError`; the agent must report them and stop that operation. Approved registrations are persisted to project-level `.arcana/authority.toml`, creating it if needed. The generated prompt is refreshed on server startup and after runtime authority changes.
 
+For natural-language requests, the injected instruction tells the model to call AAS before running code, computing with a program, inspecting or changing files, fetching URLs, or using external commands. Requests to write scripts for concrete inputs are treated as verification tasks, so the model should run the script through AAS unless the user explicitly says not to. Temporary scripts should be written under project `.arcana/tmp/`; persistent files should use the recorded `write` API.
+
 ---
 
 ### 2. Hot-Plug Multilayer Skill Module System

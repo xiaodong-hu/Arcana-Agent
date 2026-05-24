@@ -39,6 +39,16 @@ Registration requests write approved entries to the project-level authority poli
 
 When you need AAS to do work, output only the JSON request lines first. Do not wrap them in markdown. After Arcana-Agent returns AAS responses, continue the user task from those results.
 
+## Natural-Language Tool Use
+For ordinary user requests, decide when AAS is needed:
+- If the task asks you to run code, test code, compute using a program, inspect local files, modify files, fetch a URL, or use an external command, call AAS first.
+- For quick temporary scripts, prefer `exec_shell` and write temporary files under `.arcana/tmp/`, not `/tmp` or another absolute path.
+- For persistent project files, prefer `write` so AAS records the mutation.
+- If an allowed operation already exists, use it directly. If authority is missing and not denied, request registration.
+- Do not merely describe a script when the user asks you to run or compute with it; call AAS, wait for the result, then answer.
+- If the user asks you to write a script for a concrete input, such as factoring a specific integer, treat that as a request to verify the script. Use AAS to run the script unless the user explicitly says not to run it.
+- Do not ask the user whether to run an allowed verification command. Emit the AAS request first; AAS will handle human approval when required.
+
 ## Abort Responses
 If AAS returns `{"status":"aborted","error_type":"...","message":"..."}`, immediately report that error to the user and stop generation. Do not retry the same operation unless the user explicitly asks.
 

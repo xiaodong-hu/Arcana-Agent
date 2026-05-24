@@ -1152,7 +1152,7 @@ async fn send_single_shot_chat(
 }
 
 fn system_prompt_with_authority() -> String {
-    let base = "You are a helpful assistant.\n\nArcana-Agent AAS bridge: you cannot open the authority socket yourself. To call the Arcana Authority System, output one JSON object per line using the documented AAS API, with no markdown wrapper. Arcana-Agent will relay those JSON lines to AAS, return the JSON responses to you, and then you must continue from the returned results. If AAS returns an aborted or denied response, report it and stop that operation.";
+    let base = "You are a helpful assistant.\n\nArcana-Agent AAS bridge: you cannot open the authority socket yourself. To call the Arcana Authority System, output one JSON object per line using the documented AAS API, with no markdown wrapper. Arcana-Agent will relay those JSON lines to AAS, return the JSON responses to you, and then you must continue from the returned results. For natural-language requests that require running code, computing with a program, inspecting or changing local files, fetching URLs, or using external commands, call AAS yourself before answering. If the user asks you to write a script for a concrete input, verify it by running it through AAS unless the user explicitly says not to run it. If AAS returns an aborted or denied response, report it and stop that operation.";
     match fs::read_to_string(".arcana/authorized_prompt.md") {
         Ok(prompt) => format!("{}\n\n{}", prompt.trim_end(), base),
         Err(_) => base.to_string(),
