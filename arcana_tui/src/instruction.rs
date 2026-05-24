@@ -1,36 +1,59 @@
 use std::path::PathBuf;
 
-const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority Instruction
+const DEFAULT_INSTRUCTION: &str = r#"# Interface for `Arcana Authority System (AAS)`
 
-This file is human-maintained first-line authority guidance for Arcana agents.
-It describes the authority API shape only. Concrete permissions, allowed tools,
-blocked commands, filesystem rules, and network rules are supplied by the Rust
-authority program from its structured configuration.
+`Arcana Authority System` is used for every filesystem mutation, command
+execution, network request, and runtime authority change. Ask AAS when
+permission is unclear.
 
-## Required Authority Rule
+Communicate with the authority process through the Arcana-Agent AAS bridge by
+emitting one JSON object per line. Arcana-Agent relays each request to the
+session IPC channel and returns one JSON object per line back to you.
+The request schema is exactly `{"op":"..."}`. Do not use wrapper schemas such as
+`{"command":"run_terminal_cmd","params":...}`.
 
-All privileged operations must go through the Arcana authority program. The agent
-must not infer permission from this markdown file. When in doubt, ask the
-authority program or the human.
+## Discovery
+```json
+{"op":"instruction"}
+{"op":"list_authority"}
+{"op":"query","path":"README.md"}
+{"op":"prompt"}
+```
 
-## Authority APIs Exposed To Agents
+## Operations
+```json
+{"op":"read","path":"README.md"}
+{"op":"write","path":"notes.md","content":"<base64-bytes>"}
+{"op":"delete","path":"notes.md"}
+{"op":"rename","src":"old.md","dst":"new.md"}
+{"op":"exec","cmd":"cargo","args":["test"]}
+{"op":"exec_shell","command":"cargo test --all"}
+{"op":"fetch","url":"https://example.com","tag":null}
+```
 
-- `query`: ask the authority program whether an operation or path is available.
-- `read`: request file content through the authority program.
-- `write`: request a recorded file write through the authority program.
-- `delete`: request a recorded file deletion through the authority program.
-- `rename`: request a recorded file rename through the authority program.
-- `exec`: request command execution through the authority program.
-- `fetch`: request web access through the authority program.
-- `register_tool`: request runtime tool registration through the authority program.
-- `instruction`: request this human-maintained instruction text.
+## Registration
+```json
+{"op":"register_tool","name":"tool-name","path":"binary-or-script","args":[],"description":"what it does"}
+{"op":"register_command","pattern":"cargo test --all"}
+{"op":"register_web","domain":"example.com"}
+{"op":"register_filesystem","access":"writable","path":"generated/**"}
+```
 
-## Configuration Boundary
+`read` returns base64 file content. `write` requires base64 file content. If a
+request returns `{"status":"aborted","error_type":"..."}`, report that error to
+the user and stop the current operation. Do not retry or route around AAS.
 
-The source of truth for allowlists, denylists, tool permissions, command
-permissions, filesystem permissions, and web permissions is the structured
-authority configuration managed by the Rust authority program. Agents should not
-read or modify `~/.arcana/authority.toml` directly.
+When you need AAS to do work, output only the JSON request lines first. Do not
+wrap them in markdown. After Arcana-Agent returns AAS responses, continue the
+user task from those results.
+
+## Work Rule
+Always try your best to use any available combination of AAS tools, commands,
+filesystem authority, and network authority that can materially improve the
+answer to the user's request. Do the work through AAS first, then answer from
+the returned results. For temporary scripts, use `.arcana/tmp/`. For persistent
+project files, prefer `write` so AAS records the mutation. If AAS denies or
+aborts an operation, report that response and stop that operation.
 "#;
 
 pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {

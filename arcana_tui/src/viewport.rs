@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::theme::Theme;
-use crate::types::{Message, MessageRole, ThinkingBlock};
+use crate::types::{Message, MessageRole, ThinkingBlock, ToolCall, ToolType};
 
 /// Viewport state: manages scroll position and message rendering.
 #[derive(Debug)]
@@ -21,6 +21,8 @@ pub struct Viewport {
     pub is_streaming: bool,
     /// Whether thinking panels (including streaming) are collapsed
     pub think_collapsed: bool,
+    /// Whether tool-call panels are collapsed
+    pub tool_calls_collapsed: bool,
     /// Last rendered visual line count, used to keep manual-scroll views stable as content grows.
     last_total_lines: usize,
 }
@@ -42,6 +44,7 @@ impl Default for Viewport {
             streaming_text: String::new(),
             is_streaming: false,
             think_collapsed: true,
+            tool_calls_collapsed: false,
             last_total_lines: 0,
         }
     }
@@ -163,6 +166,43 @@ impl Viewport {
             }
         }
         self.scroll_offset = 0;
+    }
+
+    /// Toggle all tool-call panels expand/collapse (Ctrl+X).
+    pub fn toggle_tool_calls(&mut self) {
+        self.tool_calls_collapsed = !self.tool_calls_collapsed;
+        for msg in &mut self.messages {
+            for tc in &mut msg.tool_calls {
+                tc.collapsed = self.tool_calls_collapsed;
+            }
+        }
+        self.scroll_offset = 0;
+    }
+
+    /// Attach a tool-call panel to the most recent agent response.
+    pub fn add_tool_call(&mut self, mut tool_call: ToolCall) {
+        tool_call.collapsed = self.tool_calls_collapsed;
+        if let Some(msg) = self.messages.iter_mut().rev().find(|msg| msg.role == MessageRole::Agent) {
+            msg.tool_calls.push(tool_call);
+        }
+        if self.auto_scroll {
+            self.scroll_offset = 0;
+        }
+    }
+
+    /// Fill the latest pending tool-call panel with its result.
+    pub fn finish_latest_tool_call(&mut self, result: String, duration_ms: u64) {
+        if let Some(tc) = self.messages.iter_mut().rev()
+            .filter(|msg| msg.role == MessageRole::Agent)
+            .flat_map(|msg| msg.tool_calls.iter_mut().rev())
+            .find(|tc| tc.result.is_none())
+        {
+            tc.result = Some(result);
+            tc.duration_ms = duration_ms;
+        }
+        if self.auto_scroll {
+            self.scroll_offset = 0;
+        }
     }
 
     /// Toggle thinking for a specific dialogue (by user message index).
@@ -315,11 +355,48 @@ impl Viewport {
                         }
                     }
 
-                    // Render tool calls
+                    // Render tool-call panels
                     for tc in &msg.tool_calls {
-                        let icon = tc.tool_type.icon();
-                        let desc = format!("  {} {} ({:.1}s)", icon, tc.description, tc.duration_ms as f64 / 1000.0);
-                        lines.push((msg_idx, Line::from(Span::styled(desc, theme.tool_call))));
+                        let label = match tc.tool_type {
+                            ToolType::Shell => "Shell",
+                            ToolType::File => "File",
+                            ToolType::Search => "Search",
+                            ToolType::Web => "Web",
+                            ToolType::Other => "Tool",
+                        };
+                        if tc.collapsed {
+                            lines.push((msg_idx, Line::from(vec![
+                                Span::styled(format!("[Running]: {label} "), theme.tool_call),
+                                Span::styled("ctrl+x to expand", Style::default().fg(Color::Rgb(160, 160, 170))),
+                            ])));
+                            continue;
+                        }
+
+                        let status = if tc.result.is_some() {
+                            format!("finished in {:.1}s", tc.duration_ms as f64 / 1000.0)
+                        } else {
+                            "waiting".to_string()
+                        };
+                        lines.push((msg_idx, Line::from(vec![
+                            Span::styled("[Running]: ", theme.tool_call),
+                            Span::styled(format!("{label} ({status}) "), theme.tool_call),
+                            Span::styled("ctrl+x to fold", Style::default().fg(Color::Rgb(160, 160, 170))),
+                        ])));
+                        for line in tc.description.lines() {
+                            lines.push((msg_idx, Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled(line.to_string(), theme.agent_response),
+                            ])));
+                        }
+                        if let Some(result) = &tc.result {
+                            for line in result.lines() {
+                                lines.push((msg_idx, Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::styled(line.to_string(), theme.tool_call),
+                                ])));
+                            }
+                        }
+                        lines.push((msg_idx, Line::from("")));
                     }
 
                     // Render response content with markdown formatting

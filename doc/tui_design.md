@@ -219,6 +219,7 @@ A multi-line text input area at the bottom of the screen.
 | `Ctrl+C` | Clear input |
 | `Ctrl+B` | Stop LLM generation |
 | `Ctrl+O` | Toggle thinking chain expand/collapse (works during streaming) |
+| `Ctrl+X` | Toggle tool-call panel expand/collapse |
 | `Ctrl+/` | Toggle query sub-agent overlay |
 | `Ctrl+E` / `Ctrl+G` | Open `$EDITOR` for prompt editing |
 | `Ctrl+J` / `Ctrl+K` | Scroll viewport down/up (3 lines) |
@@ -234,20 +235,20 @@ A multi-line text input area at the bottom of the screen.
 
 **History behavior**: `Up` only enters history mode from an empty prompt. Any edit action (typing, backspace, cursor movement) immediately exits history mode.
 
-### 5.3 Slash Commands
+### 5.3 System Commands
 
-Typing `/` activates a floating autocomplete panel above the composer:
+Typing `\` activates a floating autocomplete panel above the composer:
 
 ```
 ┌─────────────────────────────────┐
-│ /model     Change active model  │
-│ /skills    List active skills   │
-│ /agents    Show sub-agent tree  │
-│ /tasks     Show task progress   │
-│ /freeze    Freeze all agents    │
-│ /resume    Resume session       │
-│ /memory    Memory commands      │
-│ /help      Show all commands    │
+│ \model     Change active model  │
+│ \skills    List active skills   │
+│ \agents    Show sub-agent tree  │
+│ \tasks     Show task progress   │
+│ \freeze    Freeze all agents    │
+│ \resume    Resume session       │
+│ \memory    Memory commands      │
+│ \help      Show all commands    │
 └─────────────────────────────────┘
 ```
 

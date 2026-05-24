@@ -6,11 +6,11 @@
 
 To reduce the waste of context for LLM to "guess" what is on hand, what is doable, and to avoid many trials blocked by the rust-managed authority program, the agent always starts dialogue by telling what kind of registered and authorized tools/network commands etc are doable for current dialogue. LLM should also be able to send a query of list of what is loaded/registered/authorized.
 
-These hard-coded headers include:
-- Authorized system tools/commands (from `~/.arcana/authority.toml`)
-- Authorized network tools (e.g., `wget`, `curl`, API endpoints)
-- Authorized user-skill defined tools/commands (from `~/.arcana/skills/`)
-- File system scope (writable, readonly, denied paths)
+The generated authority prompt includes:
+- the API-only `~/.arcana/INSTRUCTION.md`
+- the system-wide authority policy from `~/.arcana/authority.toml`
+- the project-level authority policy from `.arcana/authority.toml`, when present
+- the merged command, network, and filesystem authority snapshot
 
 ### 1.2 Long-term Memory Exposed to LLMs
 
@@ -39,7 +39,7 @@ The thinking chain is critical for DeepSeek's context caching:
 
 ---
 
-## 2. Mode Design (toggled with `/mode`)
+## 2. Mode Design (toggled with `\mode`)
 
 ### Ask Mode
 - Authority program enforces: **NO mutations** can be made by LLMs
@@ -61,7 +61,7 @@ The thinking chain is critical for DeepSeek's context caching:
 
 ## 3. Authority Constraints
 
-### 3.1 Command Authorization (`~/.arcana/authority.toml`)
+### 3.1 Command Authorization (`~/.arcana/authority.toml` and `.arcana/authority.toml`)
 
 ```toml
 [commands]
@@ -88,8 +88,8 @@ deny = ["~/.ssh", "~/.gnupg"]
 ### 3.3 Hot-reload
 
 Authority config is hot-reloadable:
-- Edit `~/.arcana/authority.toml` and changes take effect immediately
-- `arcana auth allow/deny/revoke/reset` for CLI management
+- Edit `~/.arcana/authority.toml` or project `.arcana/authority.toml` and changes take effect immediately
+- Approved registration requests are appended to project `.arcana/authority.toml`
 - Skills are similarly hot-loadable from `~/.arcana/skills/`
 
 ---

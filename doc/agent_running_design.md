@@ -357,7 +357,8 @@ dimensions = 384
 ├── memory.toml                     # Memory system configuration
 ├── models/
 │   └── all-MiniLM-L6-v2.onnx      # Local embedding model
-└── tools.toml                      # Persisted runtime-registered tools (see §2)
+├── INSTRUCTION.md                  # AAS JSONL API guidance
+└── authority.toml                  # System-wide authority policy
 
 <project>/.arcana/memory/           # Project-level
 ├── project.md                      # Human-readable project knowledge
@@ -619,7 +620,10 @@ arcana skill test <prompt>           # Test which skills would trigger for a pro
 
 - Skill installations persist in `~/.arcana/skills/system/` and `~/.arcana/skills/user/`.
 - `skill_trigger.db` is rebuilt on daemon start from all active skill manifests (source of truth is always `skill.toml`).
-- Runtime-registered tools (from `high_level_design.md`) are stored in `~/.arcana/tools.toml` and loaded as implicit skills.
+- Runtime-registered command authority is approved by AAS and persisted to the
+  project-level `.arcana/authority.toml`. Skills remain described by their own
+  manifests; AAS decides whether their requested commands, paths, and network
+  domains are permitted.
 
 ### 2.13 Security (Integration with Authority)
 

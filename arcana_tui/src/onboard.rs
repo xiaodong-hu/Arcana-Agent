@@ -234,9 +234,6 @@ fn create_global_directory(
 "#;
     std::fs::write(arcana_home.join("USER.md"), user_md)?;
 
-    // Write empty tools.toml
-    std::fs::write(arcana_home.join("tools.toml"), "# Runtime-registered tools\n")?;
-
     // Write default authority.toml
     let authority_toml = r#"# Authority configuration — editable before or after onboard
 # Hot-reloadable: changes take effect immediately

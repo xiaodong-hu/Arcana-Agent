@@ -1,12 +1,12 @@
 use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::*;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Stdio};
+use std::time::{Duration, Instant};
 
-use crate::banner;
 use crate::cli::ResumeArgs;
 use crate::composer::Composer;
 use crate::config::Config;
@@ -84,6 +84,9 @@ impl App {
             KeyAction::Expand => {
                 // Ctrl+O: toggle ALL thinking chains
                 self.viewport.toggle_thinking();
+            }
+            KeyAction::ToggleToolCalls => {
+                self.viewport.toggle_tool_calls();
             }
             KeyAction::FocusDown => {
                 // Ctrl+j: scroll viewport down
@@ -417,6 +420,91 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[Toast]) {
     }
 }
 
+struct AuthorityDaemon {
+    child: Option<Child>,
+}
+
+impl Drop for AuthorityDaemon {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn ensure_authority_daemon(
+    inherit_terminal: bool,
+) -> Result<AuthorityDaemon, Box<dyn std::error::Error>> {
+    let socket_path = Path::new(".arcana/authority.sock");
+    if authority_socket_ready(socket_path) {
+        return Ok(AuthorityDaemon { child: None });
+    }
+    if socket_path.exists() {
+        fs::remove_file(socket_path)?;
+    }
+
+    let binary = find_authority_binary()
+        .ok_or("cannot find authority_and_recording binary; build it before launching Arcana")?;
+    let mut command = std::process::Command::new(binary);
+    command.arg(".");
+    if inherit_terminal {
+        command
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit());
+    } else {
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+    }
+
+    let mut child = command.spawn()?;
+    for _ in 0..50 {
+        if authority_socket_ready(socket_path) {
+            return Ok(AuthorityDaemon { child: Some(child) });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Err("authority daemon did not create .arcana/authority.sock in time".into())
+}
+
+fn authority_socket_ready(socket_path: &Path) -> bool {
+    socket_path.exists() && UnixStream::connect(socket_path).is_ok()
+}
+
+fn find_authority_binary() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir.parent()?;
+    let candidates = [
+        repo_root
+            .join("authority_and_recording")
+            .join("target")
+            .join("release")
+            .join("authority_and_recording"),
+        repo_root
+            .join("authority_and_recording")
+            .join("target")
+            .join("debug")
+            .join("authority_and_recording"),
+        repo_root
+            .join("arcana_tui")
+            .join("target")
+            .join("release")
+            .join("authority_and_recording"),
+        repo_root
+            .join("arcana_tui")
+            .join("target")
+            .join("debug")
+            .join("authority_and_recording"),
+    ];
+    candidates.into_iter().find(|path| path.exists())
+}
+
 /// Run the interactive TUI session.
 pub async fn interactive(
     model: Option<String>,
@@ -431,6 +519,7 @@ pub async fn interactive(
         config.agents.main.provider = p;
     }
 
+    let _authority_daemon = ensure_authority_daemon(false)?;
     let mut tui = Tui::new()?;
     let mut app = App::new(&config);
 
@@ -507,17 +596,20 @@ pub async fn interactive(
   \\usage         Session token/cost stats\n\
   \\working_dir   Show current working directory\n\
   \\check         System health check\n\
-  \\auth show     Show authority config\n\
-  \\auth add      Add command to allow list\n\
-  \\auth remove   Remove from allow list\n\
-  \\auth edit     Open authority.toml in $EDITOR\n\
-  \\config show   Show ~/.arcana/config.toml\n\
+  \\config list   Show config.toml\n\
   \\config edit   Open config.toml in $EDITOR\n\
+  \\authorization list     Show authorized commands\n\
+  \\authorization add      Add command to allow list\n\
+  \\authorization remove   Remove from allow list\n\
+  \\authorization edit     Open authority.toml in $EDITOR\n\
+  \\instruction show       Show INSTRUCTION.md\n\
+  \\instruction edit       Open INSTRUCTION.md in $EDITOR\n\
 \n\
 Hotkeys:\n\
   Ctrl+e         Open $EDITOR for prompt\n\
   Ctrl+/         Toggle query agent\n\
   Ctrl+o         Expand/collapse thinking chains\n\
+  Ctrl+x         Expand/collapse tool-call panels\n\
   Ctrl+j/k       Scroll viewport down/up\n\
   Ctrl+h/l       Move cursor word left/right\n\
   Ctrl+w         Delete word left\n\
@@ -557,7 +649,49 @@ Hotkeys:\n\
                                             "Working directory:\n  {cwd}\n\nWorkspace:\n  {cwd}/.arcana/"
                                         ));
                                     }
-                                    "\\auth" | "\\auth show" => {
+                                    "\\config" | "\\config list" => {
+                                        let path = Config::path()?;
+                                        if !path.exists() {
+                                            Config::default().save()?;
+                                        }
+                                        let content = std::fs::read_to_string(&path)?;
+                                        app.viewport.add_error_message(format!(
+                                            "Config file: {}\n\n{}",
+                                            path.display(),
+                                            content
+                                        ));
+                                    }
+                                    "\\config edit" => {
+                                        let path = Config::path()?;
+                                        if !path.exists() {
+                                            Config::default().save()?;
+                                        }
+                                        let editor = config.editor.command.clone();
+                                        event_handle.abort();
+                                        tui.suspend()?;
+                                        let _ =
+                                            std::process::Command::new(&editor).arg(&path).status();
+                                        tui.resume()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+                                        match Config::load() {
+                                            Ok(new_config) => {
+                                                config = new_config;
+                                                app.status.model_name =
+                                                    config.agents.main.model.clone();
+                                                app.viewport.add_error_message(format!(
+                                                    "Config reloaded from {}",
+                                                    path.display()
+                                                ));
+                                            }
+                                            Err(e) => app.viewport.add_error_message(format!(
+                                                "Config edit saved, but reload failed: {e}"
+                                            )),
+                                        }
+                                    }
+                                    "\\authorization" | "\\authorization list" => {
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -576,47 +710,9 @@ Hotkeys:\n\
                                             );
                                         }
                                     }
-                                    "\\config" | "\\config show" => {
-                                        let path = dirs::home_dir()
-                                            .unwrap_or_default()
-                                            .join(".arcana/config.toml");
-                                        if path.exists() {
-                                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                                app.viewport.add_error_message(format!(
-                                                    "Config: {}\n\n{}",
-                                                    path.display(),
-                                                    content
-                                                ));
-                                            }
-                                        } else {
-                                            app.viewport.add_error_message(
-                                                "No config.toml found. Run: arcana onboard".into(),
-                                            );
-                                        }
-                                    }
-                                    "\\config edit" => {
-                                        let path = dirs::home_dir()
-                                            .unwrap_or_default()
-                                            .join(".arcana/config.toml");
-                                        let editor = config.editor.command.clone();
-                                        event_handle.abort();
-                                        tui.suspend()?;
-                                        let _ =
-                                            std::process::Command::new(&editor).arg(&path).status();
-                                        tui.resume()?;
-                                        let (tx, rx, handle) = event::spawn_event_reader();
-                                        event_tx = tx;
-                                        events = rx;
-                                        event_handle = handle;
-                                        app.composer.clear();
-                                        app.viewport.add_error_message(format!(
-                                            "Config reloaded from {}",
-                                            path.display()
-                                        ));
-                                    }
-                                    cmd if cmd.starts_with("\\auth add ") => {
+                                    cmd if cmd.starts_with("\\authorization add ") => {
                                         let pattern =
-                                            cmd.strip_prefix("\\auth add ").unwrap().trim();
+                                            cmd.strip_prefix("\\authorization add ").unwrap().trim();
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -633,9 +729,11 @@ Hotkeys:\n\
                                             ));
                                         }
                                     }
-                                    cmd if cmd.starts_with("\\auth remove ") => {
-                                        let pattern =
-                                            cmd.strip_prefix("\\auth remove ").unwrap().trim();
+                                    cmd if cmd.starts_with("\\authorization remove ") => {
+                                        let pattern = cmd
+                                            .strip_prefix("\\authorization remove ")
+                                            .unwrap()
+                                            .trim();
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -649,7 +747,7 @@ Hotkeys:\n\
                                             ));
                                         }
                                     }
-                                    "\\auth edit" => {
+                                    "\\authorization edit" => {
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -669,6 +767,45 @@ Hotkeys:\n\
                                         app.composer.clear();
                                         app.viewport.add_error_message(format!(
                                             "Authority config reloaded from {}",
+                                            path.display()
+                                        ));
+                                    }
+                                    "\\instruction" | "\\instruction show" => {
+                                        match crate::instruction::load_or_create() {
+                                            Ok(content) => {
+                                                let path = crate::instruction::path()?;
+                                                app.viewport.add_error_message(format!(
+                                                    "Instruction file: {}\n\n{}",
+                                                    path.display(),
+                                                    content
+                                                ));
+                                            }
+                                            Err(e) => app.viewport.add_error_message(format!(
+                                                "Cannot load instruction: {e}"
+                                            )),
+                                        }
+                                    }
+                                    "\\instruction edit" => {
+                                        let _ = crate::instruction::load_or_create()?;
+                                        let path = crate::instruction::path()?;
+                                        let editor = config.editor.command.clone();
+                                        event_handle.abort();
+                                        tui.suspend()?;
+                                        let _ =
+                                            std::process::Command::new(&editor).arg(&path).status();
+                                        tui.resume()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+
+                                        refresh_authorized_prompt_file();
+                                        conversation[0] = serde_json::json!({
+                                            "role": "system",
+                                            "content": system_prompt_with_authority()
+                                        });
+                                        app.viewport.add_error_message(format!(
+                                            "Instruction reloaded from {}",
                                             path.display()
                                         ));
                                     }
@@ -693,6 +830,18 @@ Hotkeys:\n\
                                             "✓ SOUL.md"
                                         } else {
                                             "✗ SOUL.md (missing)"
+                                        });
+                                        let user = home.join("USER.md");
+                                        lines.push(if user.exists() {
+                                            "✓ USER.md"
+                                        } else {
+                                            "✗ USER.md (missing)"
+                                        });
+                                        let instruction = home.join("INSTRUCTION.md");
+                                        lines.push(if instruction.exists() {
+                                            "✓ INSTRUCTION.md"
+                                        } else {
+                                            "✗ INSTRUCTION.md (missing)"
                                         });
                                         let key_ok = std::env::var("DEEPSEEK_API_KEY").is_ok();
                                         lines.push(if key_ok {
@@ -918,6 +1067,92 @@ Hotkeys:\n\
                         msg["reasoning_content"] = serde_json::json!(thinking);
                     }
                     conversation.push(msg);
+
+                    let authority_requests = extract_authority_json_requests(&response_text);
+                    if !authority_requests.is_empty() {
+                        let socket_path = Path::new(".arcana/authority.sock");
+                        let mut responses = Vec::new();
+                        for request in authority_requests {
+                            event_handle.abort();
+                            tui.suspend()?;
+                            let approval = approve_authority_request(request.clone())?;
+                            tui.resume()?;
+                            let (tx, rx, handle) = event::spawn_event_reader();
+                            event_tx = tx;
+                            events = rx;
+                            event_handle = handle;
+
+                            let approved = match approval {
+                                AuthorityApproval::Approved(approved) => approved,
+                                AuthorityApproval::Aborted {
+                                    response,
+                                    tool_type,
+                                    description,
+                                } => {
+                                    app.viewport.add_tool_call(ToolCall {
+                                        tool_type,
+                                        description,
+                                        result: Some(response.to_string()),
+                                        duration_ms: 0,
+                                        collapsed: false,
+                                    });
+                                    responses.push(response);
+                                    continue;
+                                }
+                            };
+
+                            app.viewport.add_tool_call(ToolCall {
+                                tool_type: approved.tool_type,
+                                description: approved.description.clone(),
+                                result: None,
+                                duration_ms: 0,
+                                collapsed: false,
+                            });
+                            tui.draw(|frame| app.render(frame))?;
+
+                            let started_at = Instant::now();
+                            let response = if socket_path.exists() {
+                                match authority_request(socket_path, approved.request.clone()) {
+                                    Ok(response) => response,
+                                    Err(e) => serde_json::json!({
+                                        "status": "denied",
+                                        "reason": format!("AAS bridge failed: {e}")
+                                    }),
+                                }
+                            } else {
+                                serde_json::json!({
+                                    "status": "denied",
+                                    "reason": "AAS bridge failed: .arcana/authority.sock not found"
+                                })
+                            };
+                            app.viewport.finish_latest_tool_call(
+                                format_authority_tool_result(&response),
+                                started_at.elapsed().as_millis() as u64,
+                            );
+                            responses.push(response);
+                        }
+
+                        let response_text = responses
+                            .into_iter()
+                            .map(|response| response.to_string())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        conversation.push(serde_json::json!({
+                            "role": "user",
+                            "content": format!("AAS returned these JSON responses, one per line:\n{response_text}\n\nContinue the task using these results. If a response is denied or aborted, report it and stop that operation.")
+                        }));
+
+                        app.viewport.is_streaming = true;
+                        app.generation_broken = false;
+                        app.stream_started_at = Some(chrono::Utc::now());
+                        app.stream_handle = Some(crate::llm::spawn_stream(
+                            &config,
+                            conversation.clone(),
+                            event_tx.clone(),
+                        ));
+                        continue;
+                    }
+
                     app.stream_handle = None;
                 }
                 AppEvent::LlmError(err) => {
@@ -1023,6 +1258,8 @@ pub async fn single_shot(
     println!("[arcana] Query: {}", query);
     println!();
 
+    let _authority_daemon = ensure_authority_daemon(true)?;
+
     // Resolve API key (env var takes priority over literal "$VAR" in config)
     let api_key = config.resolve_api_key(provider_name).ok_or_else(|| {
         format!(
@@ -1069,20 +1306,111 @@ pub async fn single_shot(
 
     // Build request body
     let thinking_config = &config.agents.main.thinking;
-    let mut body = serde_json::json!({
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt_with_authority()},
-            {"role": "user", "content": user_content}
-        ],
-        "stream": false
-    });
-    if thinking_config.enabled {
-        body["thinking"] = serde_json::json!({"type": "enabled"});
-        body["reasoning_effort"] = serde_json::json!(thinking_config.reasoning_effort);
+    let client = reqwest::Client::new();
+    let mut messages = vec![
+        serde_json::json!({"role": "system", "content": system_prompt_with_authority()}),
+        serde_json::json!({"role": "user", "content": user_content}),
+    ];
+    let mut last_usage = None;
+
+    for turn in 0..6 {
+        let data = send_single_shot_chat(
+            &client,
+            &base_url,
+            &api_key,
+            model_name,
+            &messages,
+            thinking_config.enabled,
+            &thinking_config.reasoning_effort,
+        )
+        .await?;
+
+        if let Some(usage) = data.get("usage") {
+            last_usage = Some(usage.clone());
+        }
+
+        if let Some(reasoning) = data["choices"][0]["message"]["reasoning_content"].as_str() {
+            if !reasoning.is_empty() {
+                println!("\x1b[2m<thinking>\n{}\n</thinking>\x1b[0m\n", reasoning);
+            }
+        }
+
+        let content = data["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let requests = extract_authority_json_requests(&content);
+        if requests.is_empty() {
+            println!("{}", content);
+            break;
+        }
+
+        messages.push(serde_json::json!({"role": "assistant", "content": content}));
+
+        let socket_path = Path::new(".arcana/authority.sock");
+        let mut responses = Vec::new();
+        for request in requests {
+            let response = if socket_path.exists() {
+                match authority_request(socket_path, request.clone()) {
+                    Ok(response) => response,
+                    Err(e) => serde_json::json!({
+                        "status": "denied",
+                        "reason": format!("AAS bridge failed: {e}")
+                    }),
+                }
+            } else {
+                serde_json::json!({
+                    "status": "denied",
+                    "reason": "AAS bridge failed: .arcana/authority.sock not found"
+                })
+            };
+            println!("[arcana] AAS {} -> {}", request, response);
+            responses.push(response);
+        }
+
+        let response_text = responses
+            .into_iter()
+            .map(|response| response.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        messages.push(serde_json::json!({
+            "role": "user",
+            "content": format!("AAS returned these JSON responses, one per line:\n{response_text}\n\nContinue the task using these results. If a response is denied or aborted, report it and stop that operation.")
+        }));
+
+        if turn == 5 {
+            println!("AAS bridge stopped after too many authority-request turns.");
+        }
     }
 
-    let client = reqwest::Client::new();
+    if let Some(usage) = last_usage {
+        let input = usage["prompt_tokens"].as_u64().unwrap_or(0);
+        let output = usage["completion_tokens"].as_u64().unwrap_or(0);
+        println!("\n\x1b[2m[tokens: {} in / {} out]\x1b[0m", input, output);
+    }
+
+    Ok(())
+}
+
+async fn send_single_shot_chat(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    model_name: &str,
+    messages: &[serde_json::Value],
+    thinking_enabled: bool,
+    reasoning_effort: &str,
+) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    let mut body = serde_json::json!({
+        "model": model_name,
+        "messages": messages,
+        "stream": false
+    });
+    if thinking_enabled {
+        body["thinking"] = serde_json::json!({"type": "enabled"});
+        body["reasoning_effort"] = serde_json::json!(reasoning_effort);
+    }
+
     let resp = client
         .post(format!("{}/chat/completions", base_url))
         .header("Content-Type", "application/json")
@@ -1097,36 +1425,32 @@ pub async fn single_shot(
         return Err(format!("API error ({}): {}", status, text).into());
     }
 
-    let data: serde_json::Value = resp.json().await?;
-
-    // Print reasoning if present
-    if let Some(reasoning) = data["choices"][0]["message"]["reasoning_content"].as_str() {
-        if !reasoning.is_empty() {
-            println!("\x1b[2m<thinking>\n{}\n</thinking>\x1b[0m\n", reasoning);
-        }
-    }
-
-    // Print the final answer
-    if let Some(content) = data["choices"][0]["message"]["content"].as_str() {
-        println!("{}", content);
-    }
-
-    // Print usage
-    if let Some(usage) = data.get("usage") {
-        let input = usage["prompt_tokens"].as_u64().unwrap_or(0);
-        let output = usage["completion_tokens"].as_u64().unwrap_or(0);
-        println!("\n\x1b[2m[tokens: {} in / {} out]\x1b[0m", input, output);
-    }
-
-    Ok(())
+    Ok(resp.json().await?)
 }
 
 fn system_prompt_with_authority() -> String {
-    let base = "You are a helpful assistant.";
+    let base = "You are a helpful assistant.\n\nArcana-Agent AAS bridge: you cannot open the authority socket yourself. To call the Arcana Authority System, output one JSON object per line using the documented AAS API, with no markdown wrapper. Arcana-Agent will relay those JSON lines to AAS, return the JSON responses to you, and then you must continue from the returned results. Always try your best to use any available combination of AAS tools, commands, filesystem authority, and network authority that can materially improve the answer to the user's request. If AAS returns an aborted or denied response, report it and stop that operation.";
     match fs::read_to_string(".arcana/authorized_prompt.md") {
         Ok(prompt) => format!("{}\n\n{}", prompt.trim_end(), base),
         Err(_) => base.to_string(),
     }
+}
+
+fn refresh_authorized_prompt_file() {
+    let socket_path = Path::new(".arcana/authority.sock");
+    if !socket_path.exists() {
+        return;
+    }
+    let Ok(response) = authority_request(socket_path, serde_json::json!({"op": "prompt"})) else {
+        return;
+    };
+    let Some(content) = response.get("content").and_then(|content| content.as_str()) else {
+        return;
+    };
+    if let Some(parent) = Path::new(".arcana/authorized_prompt.md").parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(".arcana/authorized_prompt.md", content);
 }
 
 async fn authority_context_for_query(query: &str, _config: &Config) -> String {
@@ -1138,29 +1462,17 @@ async fn authority_context_for_query(query: &str, _config: &Config) -> String {
     let socket_path = Path::new(".arcana/authority.sock");
     let mut sections = Vec::new();
     for url in urls {
-        // Try authority socket first; fall back to direct curl on any failure.
-        let result = if socket_path.exists() {
-            authority_url_context(socket_path, &url).await
-        } else {
-            Err("no authority socket".into())
-        };
+        if !socket_path.exists() {
+            sections.push(format!(
+                "Source: {url}\nFetch skipped: authority socket not found"
+            ));
+            continue;
+        }
 
-        match result {
+        match authority_url_context(socket_path, &url).await {
             Ok(Some(section)) => sections.push(section),
             Ok(None) => {}
-            Err(auth_err) => {
-                // Authority failed — fall back to direct curl.
-                match direct_fetch_url(&url) {
-                    Ok(text) => {
-                        sections.push(format!("Source: {url}\n\n{text}"));
-                    }
-                    Err(curl_err) => {
-                        sections.push(format!(
-                            "Source: {url}\nFetch failed (authority: {auth_err}, direct: {curl_err})"
-                        ));
-                    }
-                }
-            }
+            Err(auth_err) => sections.push(format!("Source: {url}\nFetch failed: {auth_err}")),
         }
     }
 
@@ -1169,6 +1481,21 @@ async fn authority_context_for_query(query: &str, _config: &Config) -> String {
     } else {
         format!("Authority-fetched context:\n\n{}", sections.join("\n\n"))
     }
+}
+
+struct ApprovedAuthorityRequest {
+    request: serde_json::Value,
+    tool_type: ToolType,
+    description: String,
+}
+
+enum AuthorityApproval {
+    Approved(ApprovedAuthorityRequest),
+    Aborted {
+        response: serde_json::Value,
+        tool_type: ToolType,
+        description: String,
+    },
 }
 
 /// Fetch a URL via the authority daemon over its unix socket.
@@ -1204,59 +1531,6 @@ async fn authority_url_context(
     };
 
     Ok(Some(format!("Source: {url}\n\n{text}")))
-}
-
-/// Direct curl fetch — used when the authority daemon is not reachable.
-/// Caches pages under `.arcana/web_cache/` the same way the authority daemon does.
-fn direct_fetch_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
-    // Ensure cache directory exists
-    let cache_dir = PathBuf::from(".arcana/web_cache/pages");
-    fs::create_dir_all(&cache_dir)?;
-
-    // Simple deterministic hash of URL for cache filename (djb2)
-    let url_hash = {
-        let mut h: u64 = 5381;
-        for b in url.bytes() {
-            h = h.wrapping_mul(33).wrapping_add(b as u64);
-        }
-        format!("{:016x}", h)
-    };
-    let cache_file = cache_dir.join(&url_hash);
-
-    // Fetch if not cached
-    if !cache_file.exists() {
-        let status = Command::new("curl")
-            .args([
-                "-sL", "--max-time", "30",
-                "-H", "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-                "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "-H", "Accept-Language: en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7",
-                "-o",
-            ])
-            .arg(&cache_file)
-            .arg(url)
-            .status()?;
-
-        if !status.success() {
-            let _ = fs::remove_file(&cache_file);
-            return Err(format!("curl exited with {}", status).into());
-        }
-
-        // Append to index
-        let index_path = PathBuf::from(".arcana/web_cache/index.jsonl");
-        let mut idx = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&index_path)?;
-        writeln!(idx, "{{\"url\":\"{}\",\"file\":\"{}\"}}", url, url_hash)?;
-    }
-
-    let bytes = fs::read(&cache_file)?;
-    if looks_like_pdf(&bytes) {
-        Ok(format!("[PDF fetched: {} bytes]", bytes.len()))
-    } else {
-        Ok(clean_html_for_llm(&String::from_utf8_lossy(&bytes)))
-    }
 }
 
 /// Clean raw HTML before throwing it into the LLM conversation.
@@ -1587,6 +1861,305 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&trade;", "™")
 }
 
+fn approve_authority_request(
+    mut request: serde_json::Value,
+) -> Result<AuthorityApproval, Box<dyn std::error::Error>> {
+    loop {
+        let details = authority_request_details(&request);
+        eprintln!();
+        eprintln!(
+            "[{}] LLM requires {} `{}`. Confirm Allowance?",
+            details.kind, details.verb, details.target
+        );
+        if details.kind == "Tool Call" {
+            eprintln!("    - Yes and Run [y/Enter]");
+        } else {
+            eprintln!("    - Yes [y/Enter]");
+        }
+        eprintln!("    - No and Edit [e]");
+        eprint!("    - No and Abort [n/a]: ");
+        std::io::stderr().flush().ok();
+
+        let mut input = String::new();
+        let answer = if std::io::stdin().read_line(&mut input).is_ok() {
+            input.trim().to_ascii_lowercase()
+        } else {
+            "n".into()
+        };
+
+        if answer.is_empty() || answer == "y" || answer == "yes" {
+            return Ok(AuthorityApproval::Approved(ApprovedAuthorityRequest {
+                request: confirmed_authority_request(request),
+                tool_type: details.tool_type,
+                description: details.target,
+            }));
+        }
+
+        if answer == "e" {
+            match edit_authority_target(&details.target) {
+                Ok(edited) if !edited.trim().is_empty() => {
+                    request = edit_authority_request_target(request, edited.trim());
+                    continue;
+                }
+                Ok(_) => {
+                    return Ok(aborted_authority_approval(
+                        details.tool_type,
+                        details.target,
+                        details.abort_error_type,
+                        format!("{} edit produced an empty request", details.kind),
+                    ));
+                }
+                Err(e) => {
+                    return Ok(aborted_authority_approval(
+                        details.tool_type,
+                        details.target,
+                        details.abort_error_type,
+                        format!("{} edit failed: {e}", details.kind),
+                    ));
+                }
+            }
+        }
+
+        if answer == "n" || answer == "no" || answer == "a" || answer == "abort" {
+            return Ok(aborted_authority_approval(
+                details.tool_type,
+                details.target.clone(),
+                details.abort_error_type,
+                format!("{} aborted by user: {}", details.kind, details.target),
+            ));
+        }
+    }
+}
+
+struct AuthorityRequestDetails {
+    kind: &'static str,
+    verb: &'static str,
+    target: String,
+    tool_type: ToolType,
+    abort_error_type: &'static str,
+}
+
+fn authority_request_details(request: &serde_json::Value) -> AuthorityRequestDetails {
+    match request.get("op").and_then(|op| op.as_str()).unwrap_or("") {
+        "exec_shell" => AuthorityRequestDetails {
+            kind: "Tool Call",
+            verb: "run of",
+            target: request["command"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Shell,
+            abort_error_type: "ToolCallAbortError",
+        },
+        "exec" => {
+            let cmd = request["cmd"].as_str().unwrap_or("");
+            let args = request["args"]
+                .as_array()
+                .map(|args| {
+                    args.iter()
+                        .filter_map(|arg| arg.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            AuthorityRequestDetails {
+                kind: "Tool Call",
+                verb: "run of",
+                target: if args.is_empty() {
+                    cmd.to_string()
+                } else {
+                    format!("{cmd} {args}")
+                },
+                tool_type: ToolType::Shell,
+                abort_error_type: "ToolCallAbortError",
+            }
+        }
+        "fetch" => AuthorityRequestDetails {
+            kind: "Web Access",
+            verb: "web fetch/browse of",
+            target: request["url"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Web,
+            abort_error_type: "WebAccessAbortError",
+        },
+        "read" | "write" | "delete" => AuthorityRequestDetails {
+            kind: "File Access",
+            verb: match request["op"].as_str().unwrap_or("") {
+                "read" => "read access of",
+                "write" => "write access of",
+                _ => "delete access of",
+            },
+            target: request["path"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::File,
+            abort_error_type: "FileAccessAbortError",
+        },
+        "rename" => AuthorityRequestDetails {
+            kind: "File Access",
+            verb: "rename access of",
+            target: format!(
+                "{} -> {}",
+                request["src"].as_str().unwrap_or(""),
+                request["dst"].as_str().unwrap_or("")
+            ),
+            tool_type: ToolType::File,
+            abort_error_type: "FileAccessAbortError",
+        },
+        "register_command" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["pattern"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Other,
+            abort_error_type: "ToolRegistrationAbortError",
+        },
+        "register_web" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["domain"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Web,
+            abort_error_type: "WebAccessRegistrationAbortError",
+        },
+        "register_filesystem" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["path"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::File,
+            abort_error_type: "FileAccessRegistrationAbortError",
+        },
+        "register_tool" => AuthorityRequestDetails {
+            kind: "Authority Registration",
+            verb: "registration of",
+            target: request["path"].as_str().unwrap_or("").to_string(),
+            tool_type: ToolType::Other,
+            abort_error_type: "ToolRegistrationAbortError",
+        },
+        _ => AuthorityRequestDetails {
+            kind: "Authority Request",
+            verb: "request of",
+            target: request.to_string(),
+            tool_type: ToolType::Other,
+            abort_error_type: "ToolCallAbortError",
+        },
+    }
+}
+
+fn aborted_authority_approval(
+    tool_type: ToolType,
+    description: String,
+    error_type: &'static str,
+    message: String,
+) -> AuthorityApproval {
+    AuthorityApproval::Aborted {
+        response: serde_json::json!({
+            "status": "aborted",
+            "error_type": error_type,
+            "message": message
+        }),
+        tool_type,
+        description,
+    }
+}
+
+fn confirmed_authority_request(mut request: serde_json::Value) -> serde_json::Value {
+    if let Some(op) = request.get("op").and_then(|op| op.as_str()) {
+        let confirmed_op = match op {
+            "exec" => Some("exec_confirmed"),
+            "exec_shell" => Some("exec_shell_confirmed"),
+            "fetch" => Some("fetch_confirmed"),
+            "write" => Some("write_confirmed"),
+            "delete" => Some("delete_confirmed"),
+            "rename" => Some("rename_confirmed"),
+            "register_tool" => Some("register_tool_confirmed"),
+            "register_command" => Some("register_command_confirmed"),
+            "register_web" => Some("register_web_confirmed"),
+            "register_filesystem" => Some("register_filesystem_confirmed"),
+            _ => None,
+        };
+        if let Some(confirmed_op) = confirmed_op {
+            request["op"] = serde_json::json!(confirmed_op);
+        }
+    }
+    request
+}
+
+fn edit_authority_request_target(
+    mut request: serde_json::Value,
+    edited: &str,
+) -> serde_json::Value {
+    match request.get("op").and_then(|op| op.as_str()).unwrap_or("") {
+        "exec_shell" => request["command"] = serde_json::json!(edited),
+        "exec" => {
+            request = serde_json::json!({"op": "exec_shell", "command": edited});
+        }
+        "fetch" => request["url"] = serde_json::json!(edited),
+        "read" | "write" | "delete" => request["path"] = serde_json::json!(edited),
+        "register_command" => request["pattern"] = serde_json::json!(edited),
+        "register_web" => request["domain"] = serde_json::json!(edited),
+        "register_filesystem" | "register_tool" => request["path"] = serde_json::json!(edited),
+        "rename" => {
+            if let Some((src, dst)) = edited.split_once("->") {
+                request["src"] = serde_json::json!(src.trim());
+                request["dst"] = serde_json::json!(dst.trim());
+            }
+        }
+        _ => {}
+    }
+    request
+}
+
+fn edit_authority_target(current: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let path = std::env::temp_dir().join("arcana_authority_request.txt");
+    fs::write(&path, current)?;
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
+    let status = std::process::Command::new(editor).arg(&path).status()?;
+    if !status.success() {
+        return Err("editor exited with non-zero status".into());
+    }
+    let mut edited = String::new();
+    fs::File::open(path)?.read_to_string(&mut edited)?;
+    Ok(edited)
+}
+
+fn format_authority_tool_result(response: &serde_json::Value) -> String {
+    match response.get("status").and_then(|status| status.as_str()) {
+        Some("exec_result") => {
+            let code = response["code"].as_i64().unwrap_or(-1);
+            let stdout = response["stdout"].as_str().unwrap_or("");
+            let stderr = response["stderr"].as_str().unwrap_or("");
+            let mut out = format!("exit code: {code}\nstdout:\n");
+            out.push_str(if stdout.is_empty() {
+                "<empty>\n"
+            } else {
+                stdout
+            });
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str("stderr:\n");
+            out.push_str(if stderr.is_empty() { "<empty>" } else { stderr });
+            out
+        }
+        Some("fetched") => format!(
+            "fetched: {} ({} bytes)",
+            response["path"].as_str().unwrap_or("<unknown>"),
+            response["bytes"].as_u64().unwrap_or(0)
+        ),
+        Some("content") => {
+            let bytes = response["data"]
+                .as_str()
+                .map(|data| data.len())
+                .unwrap_or(0);
+            format!("content returned: {bytes} base64 characters")
+        }
+        Some("ok") => "ok".to_string(),
+        Some("denied") => format!(
+            "denied: {}",
+            response["reason"].as_str().unwrap_or("unknown reason")
+        ),
+        Some("aborted") => format!(
+            "aborted: {}: {}",
+            response["error_type"].as_str().unwrap_or("AbortError"),
+            response["message"].as_str().unwrap_or("")
+        ),
+        _ => response.to_string(),
+    }
+}
+
 fn authority_request(
     socket_path: &Path,
     req: serde_json::Value,
@@ -1599,6 +2172,128 @@ fn authority_request(
     let mut line = String::new();
     reader.read_line(&mut line)?;
     Ok(serde_json::from_str(line.trim())?)
+}
+
+fn extract_authority_json_requests(content: &str) -> Vec<serde_json::Value> {
+    let mut requests = Vec::new();
+
+    let mut candidate = String::new();
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for ch in content.chars() {
+        if depth == 0 {
+            if ch != '{' {
+                continue;
+            }
+            candidate.clear();
+        }
+
+        if in_string && ch == '\n' {
+            candidate.push_str("\\n");
+        } else {
+            candidate.push(ch);
+        }
+
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if in_string && ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&candidate) {
+                        if let Some(request) = normalize_authority_request(value) {
+                            requests.push(request);
+                        }
+                    }
+                    candidate.clear();
+                    in_string = false;
+                    escaped = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    requests
+}
+
+fn normalize_authority_request(value: serde_json::Value) -> Option<serde_json::Value> {
+    if let Some(op) = value.get("op").and_then(|op| op.as_str()) {
+        if op.ends_with("_confirmed") {
+            return None;
+        }
+        return Some(value);
+    }
+
+    if value.get("action").and_then(|action| action.as_str()) == Some("execute") {
+        let language = value
+            .get("language")
+            .and_then(|language| language.as_str())?;
+        let code = value.get("code").and_then(|code| code.as_str())?;
+        return language_execution_command(language, code)
+            .map(|command| serde_json::json!({"op": "exec_shell", "command": command}));
+    }
+
+    let command = value.get("command").and_then(|command| command.as_str())?;
+    let params = value.get("params")?;
+    match command {
+        "run_terminal_cmd" => {
+            let cmd = params.get("cmd").and_then(|cmd| cmd.as_str())?;
+            Some(serde_json::json!({"op": "exec_shell", "command": cmd}))
+        }
+        "read_file" => {
+            let path = params.get("path").and_then(|path| path.as_str())?;
+            Some(serde_json::json!({"op": "read", "path": path}))
+        }
+        "write_file" => {
+            let path = params.get("path").and_then(|path| path.as_str())?;
+            let content = params.get("content").and_then(|content| content.as_str())?;
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            Some(serde_json::json!({
+                "op": "write",
+                "path": path,
+                "content": STANDARD.encode(content.as_bytes())
+            }))
+        }
+        "browser" | "fetch" => {
+            let url = params
+                .get("url")
+                .or_else(|| params.get("website"))
+                .and_then(|url| url.as_str())?;
+            Some(serde_json::json!({"op": "fetch", "url": url, "tag": null}))
+        }
+        _ => None,
+    }
+}
+
+fn language_execution_command(language: &str, code: &str) -> Option<String> {
+    let executable = match language.to_ascii_lowercase().as_str() {
+        "python" | "python3" => "python3",
+        "julia" => "julia",
+        "bash" | "sh" | "shell" => "sh",
+        _ => return None,
+    };
+    let delimiter = "ARCANA_TOOL_EOF";
+    Some(format!(
+        "{executable} << '{delimiter}'\n{code}\n{delimiter}"
+    ))
 }
 
 fn extract_urls(text: &str) -> Vec<String> {

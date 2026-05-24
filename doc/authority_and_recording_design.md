@@ -42,62 +42,81 @@ Why Merged? Every mutable operation MUST be recorded. By placing recording insid
 | `delete` | `path` | `ok` / `denied` |
 | `rename` | `src`, `dst` | `ok` / `denied` |
 | `query` | `path` | `{ permission: "none" \| "read" \| "write" }` |
-| `fetch` | `url`, optional `tag` | `ok { path, bytes }` / `denied` |
-| `exec` | `cmd`, `args` | `ok { stdout, stderr, code }` / `denied` |
+| `fetch` | `url`, optional `tag` | `ok { path, bytes }` / `denied` / `aborted` |
+| `exec` | `cmd`, `args` | `ok { stdout, stderr, code }` / `denied` / `aborted` |
+| `exec_shell` | `command` | `ok { stdout, stderr, code }` / `aborted` |
 | `register_tool` | `name`, `path`, `description` | `ok` / `denied` |
-| `prompt` | *(none)* | `{ content: "<markdown>" }` |
+| `register_command` | `pattern` | `ok` / `aborted` |
+| `register_web` | `domain` | `ok` / `aborted` |
+| `register_filesystem` | `access`, `path` | `ok` / `aborted` |
+| `instruction` | *(none)* | `{ content: "<markdown>" }` |
+| `list_authority` | *(none)* | merged authority snapshot |
+| `prompt` | *(none)* | full injected prompt |
 
 
 ### LLM Authority Prompt (`authorized_prompt.md`)
 
 The authority program **auto-generates** a project-level file `.arcana/authorized_prompt.md` that serves as the first-line context exposed to LLMs at the beginning of each session. This file:
 
-1. **Describes all available tools** with their exact JSON request format.
-2. **Lists current permissions** (allowed/denied write paths, read-deny rules, web domains, command whitelist).
-3. **Explains the IPC protocol** (unix socket, one JSON per line, one response per line).
-4. **Is regenerated** on server startup and whenever tools/permissions change at runtime (e.g., after `register_tool`).
+1. Includes the human-maintained API instruction.
+2. Includes the loaded system-wide authority TOML.
+3. Includes the loaded project-level authority TOML when present.
+4. Includes the merged machine-readable authority snapshot.
+5. Describes typed abort responses that the LLM must report and stop on.
+6. Is regenerated on server startup and whenever tools/permissions change at runtime.
 
 #### Generation
 
 - **On server startup:** The authority program writes `.arcana/authorized_prompt.md` before accepting connections.
-- **On hot-change:** After a successful `register_tool` or config reload, the file is regenerated.
-- **CLI access:** `authority_and_recording auth prompt [project_root]` prints the prompt to stdout and writes the file.
+- **On hot-change:** After successful runtime registration or config reload, the file is regenerated.
+- **CLI access:** `authority_and_recording auth instruction [project_root]` prints the instruction text.
 - **IPC access:** `{"op": "prompt"}` returns the prompt content directly (not base64 — plain text).
 
 #### Usage by TUI
 
-The TUI (`arcana_tui`) reads `.arcana/authorized_prompt.md` and **mandatorily prepends** it to the system message at the start of each session. This ensures the LLM always knows:
+The TUI (`arcana_tui`) reads `.arcana/authorized_prompt.md` and **mandatorily prepends** it to the system message at the start of each session. When the model emits AAS JSON request lines, Arcana-Agent asks the human to approve/edit/abort privileged operations, relays approved requests to `.arcana/authority.sock`, shows command stdout/stderr in an embedded tool-call panel, appends the JSON responses back into the conversation, and lets the model continue. This ensures the LLM always knows:
 - What tools are available and how to invoke them.
 - What permissions it has (so it doesn't attempt denied operations).
 - That all operations go through the authority socket (not direct filesystem access).
+- That natural-language requests should use any available combination of AAS
+  tools, commands, filesystem authority, and network authority that can
+  materially improve the answer.
 
 
-#### Config (`.arcana/access.toml`)
+#### Config (`~/.arcana/authority.toml` and `.arcana/authority.toml`)
+
+Authority policy uses the same TOML schema at both levels. The system-wide file supplies global defaults. The project-level file supplies project additions and is created by approved registration APIs when needed. Both files are exposed to the LLM as first-line context, and the authority program enforces the merged view.
 
 ```toml
-[rules]
-allow_write = ["src/**/*.rs", ".arcana/scratch/**"]
-deny_write  = [".env", "secrets/**", ".arcana/git_record/**"]
-deny_read   = [".env", "secrets/**", ".git/config"]
-default = "prompt"
+[commands]
+allow = ["ls", "cat", "rg", "cargo test"]
+confirm = ["git commit", "git push", "rm"]
+deny = ["sudo *"]
 
-[web]
-default = "prompt"
-allow_domains = ["docs.rs", "crates.io", "github.com"]
-deny_domains  = []
+[network]
+allow = ["docs.rs", "crates.io", "github.com"]
+deny = ["*"]
 
-[tools]
-# Static whitelist: commands the agent can always execute
-allow = ["ls", "cat", "find", "grep", "head", "tail", "wc", "diff", "tree"]
-# Commands that are always denied (even if agent tries to register them)
-deny  = ["rm -rf /", "sudo", "su", "chmod", "chown"]
-# Whether the agent can register new tools at runtime
-allow_runtime_registration = true
-# Default for unlisted commands
-default = "prompt"
+[filesystem]
+writable = ["src/**", "Cargo.toml"]
+readonly = ["/etc", "/usr"]
+deny = [".env", "secrets/**"]
 ```
 
 Rule evaluation order (for all rule types): deny → allow → default.
+
+#### Human Approval and Edit Loop
+
+For prompt-required operations, AAS shows a typed confirmation prompt:
+
+```text
+[Tool Call] LLM requires `cargo test`. Confirm Allowance?
+    - Yes and Run [y/Enter]
+    - No and Edit [e]
+    - No and Abort [n/a]:
+```
+
+Editing opens `$EDITOR` with the LLM request. Saving returns to the same confirmation prompt with the edited value. Aborting returns a typed response such as `ToolCallAbortError`, `WebAccessAbortError`, or `FileAccessRegistrationAbortError`. The LLM is instructed to surface the error to the user and stop the current operation.
 
 
 ### Read-Deny Rules
@@ -133,10 +152,12 @@ The agent cannot execute arbitrary system commands. All execution goes through t
 
 #### Static Whitelist (config-time)
 
-Defined in `[tools]` section of `access.toml`. These are available immediately when the agent starts:
+Defined in the `[commands]` section of `~/.arcana/authority.toml` and project
+`.arcana/authority.toml`. These are available immediately when the agent starts:
 - `allow` — commands the agent can run without prompting.
+- `confirm` — commands that require human approval and optional editing.
 - `deny` — commands that are always blocked.
-- Unlisted commands → `default` behavior (prompt/allow/deny).
+- Unlisted commands → runtime default behavior.
 
 #### Runtime Registration (by SKILLs/MCPs)
 
@@ -146,9 +167,12 @@ The agent (or its skill/MCP plugins) can request to register new tools at runtim
 {"op": "register_tool", "name": "cargo_test", "path": "/usr/bin/cargo", "args": ["test"], "description": "Run cargo tests"}
 ```
 
-- If `allow_runtime_registration = true`, the authority program prompts the user once: `"Agent wants to register tool 'cargo_test' (/usr/bin/cargo test). Allow? [y/N]"`
-- Once approved, the tool is added to the session's allowed list and **persisted to `~/.arcana/tools.toml`** for future sessions.
-- If `allow_runtime_registration = false`, all registration requests are denied.
+- The authority program prompts the user with the same allow/edit/abort loop used
+  for execution requests.
+- Once approved, the tool or command authority is added to the session's allowed
+  list and **persisted to project `.arcana/authority.toml`**.
+- If denied or aborted, the authority program returns a typed abort response such
+  as `ToolRegistrationAbortError`.
 
 #### Execution Flow
 
@@ -168,9 +192,9 @@ Agent: {"op": "exec", "cmd": "cargo", "args": ["build"]}
 Authority:
   1. Check deny → no
   2. Check allow → no
-  3. Check runtime registered → no
-  4. default = "prompt" → ask user
-  5. User approves → execute and return result
+  3. Check confirm list or runtime default → ask user
+  4. User approves, edits, or aborts
+  5. Approved command executes and returns captured stdout/stderr/status
 ```
 
 
@@ -346,16 +370,27 @@ pub enum Request {
     Query { path: String },
     Fetch { url: String, tag: Option<String> },
     Exec { cmd: String, args: Vec<String> },
+    ExecShell { command: String },
     RegisterTool { name: String, path: String, args: Vec<String>, description: String },
+    RegisterCommand { pattern: String },
+    RegisterWeb { domain: String },
+    RegisterFilesystem { access: FilesystemAccess, path: String },
+    Instruction,
+    ListAuthority,
+    Prompt,
 }
 
 pub enum Response {
     Ok,
     Denied { reason: String },
+    Aborted { error_type: AuthorityErrorType, message: String },
     Permission { level: AccessLevel },
     Content { data: String },           // base64 file content
     Fetched { path: String, bytes: u64 },
     ExecResult { stdout: String, stderr: String, code: i32 },
+    Instruction { content: String },
+    Authority { snapshot: AuthoritySnapshot },
+    Prompt { content: String },
 }
 ```
 
@@ -363,5 +398,5 @@ pub enum Response {
 ## Open Questions
 
 - [ ] Web cache eviction policy (max size? TTL?).
-- [x] Should runtime-registered tools persist across sessions? **YES.** Approved tools are persisted to `~/.arcana/tools.toml` so users can "hot-plug" SKILLs that survive restarts. See `agent_running_design.md` §2 for full SKILL lifecycle design.
+- [x] Should runtime-registered authority persist across sessions? **YES.** Approved registrations are persisted to project `.arcana/authority.toml`; system-wide policy remains user-owned.
 - [ ] Rate limiting on exec requests to prevent abuse.

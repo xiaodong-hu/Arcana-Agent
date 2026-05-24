@@ -124,13 +124,18 @@ readonly = ["/etc", "/usr"]
 deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
 ```
 
-Runtime management: `\auth list|add|remove|edit`
+Runtime management: `\authorization list|add|remove|edit`
 
 #### LLM Authority Instruction
 
-The authority program reads the human-maintained authority instruction and auto-generates `.arcana/authorized_prompt.md` as mandatory first-line LLM context. The instruction stays API-only; current filesystem, command, and network policy is exposed separately as a structured authority snapshot.
+The authority program reads the human-maintained authority instruction and auto-generates `.arcana/authorized_prompt.md` as mandatory first-line LLM context. The generated prompt includes:
 
-Agents interact with authority by sending JSONL requests to the session authority socket:
+- the API-only `~/.arcana/INSTRUCTION.md`,
+- the loaded system-wide authority TOML,
+- the loaded project-level `.arcana/authority.toml` when present,
+- the merged machine-readable authority snapshot.
+
+Agents interact with authority by emitting JSONL requests. Arcana-Agent detects those request lines, asks the human to approve/edit/abort privileged operations in the TUI, relays approved requests to the session authority socket, shows stdout/stderr in an embedded tool-call panel, and returns the JSON responses to the model:
 
 ```bash
 # View the instruction text:
@@ -142,9 +147,15 @@ arcana auth instruction
 {"op":"list_authority"}
 {"op":"query","path":"README.md"}
 {"op":"fetch","url":"https://example.com","tag":null}
+{"op":"exec_shell","command":"cargo test\ncargo clippy"}
+{"op":"register_command","pattern":"cargo test"}
+{"op":"register_web","domain":"example.com"}
+{"op":"register_filesystem","access":"writable","path":"src/**"}
 ```
 
-The generated prompt is refreshed on server startup and after runtime authority changes.
+Unlisted operations can be approved, edited, or aborted by the human. Abort responses are typed, for example `ToolCallAbortError`, `WebAccessAbortError`, and `FileAccessRegistrationAbortError`; the agent must report them and stop that operation. Approved registrations are persisted to project-level `.arcana/authority.toml`, creating it if needed. The generated prompt is refreshed on server startup and after runtime authority changes.
+
+For natural-language requests, the injected instruction tells the model to use any available combination of AAS tools, commands, filesystem authority, and network authority that can materially improve the answer. Temporary scripts should be written under project `.arcana/tmp/`; persistent files should use the recorded `write` API.
 
 ---
 
@@ -352,6 +363,7 @@ arcana resume --last            # Resume previous session
 | `Ctrl+e` | Open `$EDITOR` for prompt editing |
 | `Ctrl+b` | Stop LLM generation immediately |
 | `Ctrl+o` | Toggle thinking chain expand/collapse |
+| `Ctrl+x` | Toggle tool-call panel expand/collapse |
 | `Ctrl+j` / `Ctrl+k` | Scroll viewport down/up |
 | `Ctrl+Enter` | Newline in composer (also `Shift+Enter`) |
 | `Ctrl+w` | Delete word left |
@@ -374,12 +386,15 @@ Type `\` then press `↓` to browse all commands with arrow keys. Press `Esc` to
 | `\usage` | Session token/cost statistics |
 | `\working_dir` | Show current working directory |
 | `\check` | System health check |
-| `\auth show` | Show authority config |
-| `\auth add <cmd>` | Add to allow list |
-| `\auth remove <cmd>` | Remove from allow list |
-| `\auth edit` | Open authority.toml in `$EDITOR` |
-| `\config show` | Show ~/.arcana/config.toml |
+| `\config list` | Show `~/.arcana/config.toml` |
 | `\config edit` | Open config.toml in `$EDITOR` |
+| `\authorization list` | Show authorized commands |
+| `\authorization add <cmd>` | Add to allow list |
+| `\authorization remove <cmd>` | Remove from allow list |
+| `\authorization edit` | Open authority.toml in `$EDITOR` |
+| `\instruction show` | Show `~/.arcana/INSTRUCTION.md` |
+| `\instruction edit` | Open INSTRUCTION.md in `$EDITOR` |
+| `\help` | Show all commands and hotkeys |
 
 ---
 

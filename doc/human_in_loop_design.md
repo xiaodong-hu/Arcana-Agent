@@ -6,29 +6,23 @@ Arcana's authority system ensures the agent never performs destructive actions w
 
 ## Approval Panel
 
-When the agent requests a mutation that requires approval, the TUI displays an approval panel with four options:
+When the agent requests an operation that requires approval, AAS displays a
+typed confirmation prompt:
 
 ```
-┌─ Authority ──────────────────────────────────────────┐
-│ write requires approval: src/main.rs                  │
-│                                                       │
-│ ❯ Yes, single permission                             │
-│   Trust, always allow in this session                 │
-│   Human interrupt (wait for edit)                     │
-│   Reject and abort                                    │
-│                                                       │
-│ ↑↓ select │ Enter confirm │ Esc reject                │
-└───────────────────────────────────────────────────────┘
+[Tool Call] LLM requires `cargo test`. Confirm Allowance?
+    - Yes and Run [y/Enter]
+    - No and Edit [e]
+    - No and Abort [n/a]:
 ```
 
 ### Options
 
 | Option | Behavior |
 |--------|----------|
-| **Yes, single permission** | Approve this one mutation only. Next mutation will ask again. |
-| **Trust, always allow in this session** | Approve all mutations for the remainder of this session. Dangerous — use with caution. |
-| **Human interrupt (wait for edit)** | Pause the agent. The diff is written to a temp file. User can edit in their `$EDITOR`, modify the changes, then resume. Agent continues with the human-modified version. |
-| **Reject and abort** | Reject the mutation. Agent is informed and must find an alternative approach. |
+| **Yes and Run / Yes** | Approve this one operation. |
+| **No and Edit** | Open `$EDITOR` with the requested command, URL, path, or registration value. Saving returns to the same confirmation prompt. |
+| **No and Abort** | Return a typed abort response. The agent must report it and stop the current operation. |
 
 ### Keybindings
 
@@ -92,21 +86,23 @@ When "Edit in $EDITOR" is selected:
 
 ## Integration with Authority System
 
-The approval and diff review panels integrate with `~/.arcana/authority.toml`:
+The approval and diff review panels integrate with the merged AAS policy from
+`~/.arcana/authority.toml` and project `.arcana/authority.toml`:
 
 - Commands in `[commands.allow]` execute without approval
 - Commands in `[commands.confirm]` always show the approval panel
+- Unlisted command, filesystem, and network registration requests can be allowed,
+  edited, or aborted; approved registrations are written to project
+  `.arcana/authority.toml`
 - File writes within `[filesystem.writable]` scope show diff review
 - File writes to `[filesystem.deny]` paths are always rejected
 - Network requests to `[network.deny]` hosts are always rejected
 
 ### Session Trust
 
-When "Trust, always allow in this session" is selected:
-- A session-level flag is set for that operation type
-- Subsequent similar operations proceed without asking
-- Trust resets when the session ends
-- Trust is **never** persisted to disk (security)
+When the user approves a one-shot operation, the operation proceeds once. When
+the user approves a registration request, the new command pattern, web domain,
+or filesystem path is persisted to project `.arcana/authority.toml`.
 
 ---
 

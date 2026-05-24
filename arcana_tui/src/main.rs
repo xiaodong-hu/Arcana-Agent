@@ -7,6 +7,7 @@ mod config;
 mod diff_panel;
 mod event;
 mod highlight;
+mod instruction;
 mod llm;
 mod onboard;
 mod overlay;
@@ -24,7 +25,6 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use cli::{Cli, Command};
-use config::Config;
 
 #[tokio::main]
 async fn main() {
@@ -351,6 +351,38 @@ mod check {
         } else {
             println!("  ✗ Global config (~/.arcana/config.toml not found)");
             println!("    → Run: arcana onboard");
+        }
+
+        let authority_path = arcana_home.join("authority.toml");
+        if authority_path.exists() {
+            println!("  ✓ Authority policy (~/.arcana/authority.toml)");
+        } else {
+            println!("  ✗ Authority policy (~/.arcana/authority.toml not found)");
+            println!("    → Run: arcana onboard");
+        }
+
+        let soul_path = arcana_home.join("SOUL.md");
+        if soul_path.exists() {
+            println!("  ✓ Agent personality (~/.arcana/SOUL.md)");
+        } else {
+            println!("  ✗ Agent personality (~/.arcana/SOUL.md not found)");
+            println!("    → Run: arcana onboard");
+        }
+
+        let user_path = arcana_home.join("USER.md");
+        if user_path.exists() {
+            println!("  ✓ User portrait (~/.arcana/USER.md)");
+        } else {
+            println!("  ✗ User portrait (~/.arcana/USER.md not found)");
+            println!("    → Run: arcana onboard");
+        }
+
+        let instruction_path = arcana_home.join("INSTRUCTION.md");
+        if instruction_path.exists() {
+            println!("  ✓ Authority instruction (~/.arcana/INSTRUCTION.md)");
+        } else {
+            println!("  ✗ Authority instruction (~/.arcana/INSTRUCTION.md not found)");
+            println!("    → Run: arcana onboard or open `\\instruction show` in the TUI");
         }
 
         let model_path = arcana_home.join("models").join("all-MiniLM-L6-v2.onnx");
