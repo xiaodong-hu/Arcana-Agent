@@ -1072,6 +1072,29 @@ Hotkeys:\n\
                                     app.viewport.add_separator();
                                 }
                                 app.show_banner = false;
+                            } else if action == KeyAction::ToggleSelectionMode {
+                                // Ctrl+Y: suspend TUI for terminal-native text selection
+                                event_handle.abort();
+                                tui.suspend()?;
+                                eprintln!(
+                                    "[Arcana] Selection mode — use mouse to select & copy text."
+                                );
+                                eprintln!("         Press Enter to return to Arcana.");
+                                // Wait for Enter
+                                let mut buf = String::new();
+                                loop {
+                                    buf.clear();
+                                    if std::io::stdin().read_line(&mut buf).is_ok()
+                                        && buf.trim().is_empty()
+                                    {
+                                        break;
+                                    }
+                                }
+                                tui.resume()?;
+                                let (tx, rx, handle) = event::spawn_event_reader();
+                                event_tx = tx;
+                                events = rx;
+                                event_handle = handle;
                             } else if action == KeyAction::OpenEditor {
                                 // Ctrl+e: open $EDITOR for prompt editing
                                 let editor = config.editor.command.clone();
