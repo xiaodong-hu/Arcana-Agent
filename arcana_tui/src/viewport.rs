@@ -383,10 +383,13 @@ impl Viewport {
                         let text = if line_text.is_empty() && i > 0 {
                             // empty continuation line → just background fill
                             let pad = fill_w.saturating_sub(2); // "  "
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::styled("  ", bg),
-                                Span::styled(" ".repeat(pad), bg),
-                            ])));
+                            lines.push((
+                                msg_idx,
+                                Line::from(vec![
+                                    Span::styled("  ", bg),
+                                    Span::styled(" ".repeat(pad), bg),
+                                ]),
+                            ));
                             continue;
                         } else {
                             line_text.to_string()
@@ -405,9 +408,10 @@ impl Viewport {
                         lines.push((msg_idx, Line::from(spans)));
                     }
                     // Full-width background separator line after user message
-                    lines.push((msg_idx, Line::from(vec![
-                        Span::styled(" ".repeat(fill_w), bg),
-                    ])));
+                    lines.push((
+                        msg_idx,
+                        Line::from(vec![Span::styled(" ".repeat(fill_w), bg)]),
+                    ));
                 }
                 MessageRole::Agent => {
                     // Render thinking blocks (collapsed by default, Ctrl+O to expand)
@@ -470,55 +474,78 @@ impl Viewport {
                             ("[Arcana Request]: ", AMBER_SAE_ECE)
                         };
 
-                        // ── Shell: full panel with expand/collapse, timing, result ──
+                        // ── Shell: full panel with inline command, timing, result ──
                         if tc.tool_type == ToolType::Shell {
                             let status = if tc.result.is_some() {
-                                format!("finished in {:.1}s", tc.duration_ms as f64 / 1000.0)
+                                format!("({:.1}s)", tc.duration_ms as f64 / 1000.0)
                             } else {
-                                "waiting".to_string()
+                                "(waiting)".to_string()
                             };
+
+                            // Build the first line: heading + "Shell" + inline highlighted command + timing + hint
+                            let mut first_spans: Vec<Span> = vec![
+                                Span::styled(
+                                    heading,
+                                    Style::default()
+                                        .fg(heading_color)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(
+                                    "Shell ",
+                                    Style::default().fg(heading_color),
+                                ),
+                            ];
+
+                            // Inline highlighted command (single-line; multiline → first line only)
+                            let cmd_first_line = tc.description.lines().next().unwrap_or("");
+                            let cmd_spans = crate::highlight::highlight_lines(cmd_first_line, "bash");
+                            if let Some(first_cmd) = cmd_spans.first() {
+                                for span in first_cmd {
+                                    first_spans.push(Span::styled(
+                                        format!("`{}`", span.text),
+                                        Style::default().fg(span.fg),
+                                    ));
+                                }
+                            }
+
+                            first_spans.push(Span::styled(
+                                format!(" {status} "),
+                                Style::default().fg(heading_color),
+                            ));
+
+                            let hint = if tc.collapsed {
+                                "ctrl+x to expand"
+                            } else {
+                                "ctrl+x to fold"
+                            };
+                            first_spans.push(Span::styled(hint, Style::default().fg(TOOL_HINT)));
+
+                            lines.push((msg_idx, Line::from(first_spans)));
+
+                            // Collapsed: just the first line, nothing below
                             if tc.collapsed {
-                                lines.push((
-                                    msg_idx,
-                                    Line::from(vec![
-                                        Span::styled(
-                                            heading,
-                                            Style::default()
-                                                .fg(heading_color)
-                                                .add_modifier(Modifier::BOLD),
-                                        ),
-                                        Span::styled(
-                                            format!("Shell ({status}) "),
-                                            Style::default().fg(heading_color),
-                                        ),
-                                        Span::styled(
-                                            "ctrl+x to expand",
-                                            Style::default().fg(TOOL_HINT),
-                                        ),
-                                    ]),
-                                ));
                                 continue;
                             }
 
-                            lines.push((
-                                msg_idx,
-                                Line::from(vec![
-                                    Span::styled(
-                                        heading,
-                                        Style::default()
-                                            .fg(heading_color)
-                                            .add_modifier(Modifier::BOLD),
-                                    ),
-                                    Span::styled(
-                                        format!("Shell ({status}) "),
-                                        Style::default().fg(heading_color),
-                                    ),
-                                    Span::styled("ctrl+x to fold", Style::default().fg(TOOL_HINT)),
-                                ]),
-                            ));
-                            for line in render_tool_command_lines(tc, theme) {
-                                lines.push((msg_idx, line));
+                            // ── Expanded: full command (multiline) + result ──
+                            // Show remaining command lines (if multiline)
+                            let cmd_all_lines: Vec<&str> = tc.description.lines().collect();
+                            if cmd_all_lines.len() > 1 {
+                                for cmd_line in &cmd_all_lines[1..] {
+                                    let hl = crate::highlight::highlight_lines(cmd_line, "bash");
+                                    for spans in &hl {
+                                        let mut line_spans = vec![Span::raw("  ")];
+                                        for span in spans {
+                                            line_spans.push(Span::styled(
+                                                span.text.clone(),
+                                                Style::default().fg(span.fg),
+                                            ));
+                                        }
+                                        lines.push((msg_idx, Line::from(line_spans)));
+                                    }
+                                }
                             }
+
                             if let Some(result) = &tc.result {
                                 if !result.is_empty() {
                                     lines.push((msg_idx, Line::from("")));
@@ -807,38 +834,6 @@ impl Viewport {
         let paragraph = Paragraph::new(visible_lines);
         frame.render_widget(paragraph, inner);
     }
-}
-
-fn render_tool_command_lines<'a>(tool_call: &ToolCall, theme: &Theme) -> Vec<Line<'a>> {
-    if tool_call.tool_type != ToolType::Shell {
-        return tool_call
-            .description
-            .lines()
-            .map(|line| {
-                Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(line.to_string(), theme.agent_response),
-                ])
-            })
-            .collect();
-    }
-
-    crate::highlight::highlight_lines(&tool_call.description, "bash")
-        .into_iter()
-        .map(|spans| {
-            let mut line_spans = vec![Span::raw("  ")];
-            if spans.is_empty() {
-                line_spans.push(Span::raw(""));
-            } else {
-                line_spans.extend(
-                    spans
-                        .into_iter()
-                        .map(|span| Span::styled(span.text, Style::default().fg(span.fg))),
-                );
-            }
-            Line::from(line_spans)
-        })
-        .collect()
 }
 
 /// Linearly interpolate between two RGB colors.
