@@ -1277,8 +1277,7 @@ Hotkeys:\n\
                                     } else {
                                         event_handle.abort();
                                         tui.suspend()?;
-                                        let approval =
-                                            approve_authority_request(request.clone())?;
+                                        let approval = approve_authority_request(request.clone())?;
                                         tui.resume()?;
                                         let (tx, rx, handle) = event::spawn_event_reader();
                                         event_tx = tx;
@@ -2362,14 +2361,52 @@ fn confirmed_authority_request(mut request: serde_json::Value) -> serde_json::Va
 
 /// Safe read-only commands that never need human confirmation.
 const SAFE_COMMANDS: &[&str] = &[
-    "echo", "ls", "cat", "head", "tail", "less", "more",
-    "grep", "egrep", "fgrep", "rg", "find", "locate",
-    "wc", "sort", "uniq", "cut", "tr", "awk", "sed",
-    "file", "stat", "du", "df", "which", "type", "whereis",
-    "pwd", "env", "printenv", "whoami", "hostname", "uname",
-    "date", "cal", "uptime", "ps", "top",
-    "git diff", "git status", "git log", "git show", "git branch",
-    "git tag", "git remote", "git stash list",
+    "echo",
+    "ls",
+    "cat",
+    "head",
+    "tail",
+    "less",
+    "more",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "find",
+    "locate",
+    "wc",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "awk",
+    "sed",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "which",
+    "type",
+    "whereis",
+    "pwd",
+    "env",
+    "printenv",
+    "whoami",
+    "hostname",
+    "uname",
+    "date",
+    "cal",
+    "uptime",
+    "ps",
+    "top",
+    "git diff",
+    "git status",
+    "git log",
+    "git show",
+    "git branch",
+    "git tag",
+    "git remote",
+    "git stash list",
     "tree",
 ];
 
@@ -2408,8 +2445,15 @@ fn is_safe_authority_request(request: &serde_json::Value) -> bool {
                     if let Some(args) = args {
                         if let Some(sub) = args.first().and_then(|a| a.as_str()) {
                             return matches!(
-                                sub, "diff" | "status" | "log" | "show" | "branch"
-                                    | "tag" | "remote" | "stash"
+                                sub,
+                                "diff"
+                                    | "status"
+                                    | "log"
+                                    | "show"
+                                    | "branch"
+                                    | "tag"
+                                    | "remote"
+                                    | "stash"
                             );
                         }
                     }
