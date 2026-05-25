@@ -371,33 +371,42 @@ impl Viewport {
                 MessageRole::User => {
                     let bg = Style::default().bg(theme.composer_bg);
                     let text_style = theme.composer_text;
+                    let fill_w = inner.width as usize;
                     let content_lines: Vec<&str> = msg.content.split('\n').collect();
                     for (i, line_text) in content_lines.iter().enumerate() {
-                        if i == 0 {
-                            lines.push((
-                                msg_idx,
-                                Line::from(vec![
-                                    Span::styled("❯ ", theme.prompt_glyph.bg(theme.composer_bg)),
-                                    Span::styled(line_text.to_string(), text_style.bg(theme.composer_bg)),
-                                ]),
-                            ));
-                        } else if line_text.is_empty() {
+                        let prefix = if i == 0 { "❯ " } else { "  " };
+                        let prefix_style = if i == 0 {
+                            theme.prompt_glyph.bg(theme.composer_bg)
+                        } else {
+                            bg
+                        };
+                        let text = if line_text.is_empty() && i > 0 {
+                            // empty continuation line → just background fill
+                            let pad = fill_w.saturating_sub(2); // "  "
                             lines.push((msg_idx, Line::from(vec![
                                 Span::styled("  ", bg),
+                                Span::styled(" ".repeat(pad), bg),
                             ])));
+                            continue;
                         } else {
-                            lines.push((
-                                msg_idx,
-                                Line::from(vec![
-                                    Span::styled("  ", bg),
-                                    Span::styled(line_text.to_string(), text_style.bg(theme.composer_bg)),
-                                ]),
-                            ));
+                            line_text.to_string()
+                        };
+                        let prefix_w = unicode_width::UnicodeWidthStr::width(prefix);
+                        let text_w = unicode_width::UnicodeWidthStr::width(text.as_str());
+                        let used_w = prefix_w + text_w;
+                        let pad = fill_w.saturating_sub(used_w);
+                        let mut spans = vec![
+                            Span::styled(prefix, prefix_style),
+                            Span::styled(text, text_style.bg(theme.composer_bg)),
+                        ];
+                        if pad > 0 {
+                            spans.push(Span::styled(" ".repeat(pad), bg));
                         }
+                        lines.push((msg_idx, Line::from(spans)));
                     }
-                    // Blank separator line after user message (with background)
+                    // Full-width background separator line after user message
                     lines.push((msg_idx, Line::from(vec![
-                        Span::styled("", bg),
+                        Span::styled(" ".repeat(fill_w), bg),
                     ])));
                 }
                 MessageRole::Agent => {
