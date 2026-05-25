@@ -452,7 +452,9 @@ impl Composer {
 
     /// Render the composer.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::default().borders(Borders::TOP);
+        let block = Block::default()
+            .borders(Borders::TOP)
+            .bg(theme.composer_bg);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -483,7 +485,7 @@ impl Composer {
         let content_style = if in_slash_mode {
             Style::default().fg(Color::Cyan)
         } else {
-            Style::default().fg(Color::White)
+            theme.composer_text
         };
         let prompt_style = if in_slash_mode {
             Style::default()
@@ -708,16 +710,8 @@ fn slash_hint(input: &str) -> &'static str {
         "\\instruction e" | "\\instruction ed" | "\\instruction edi" | "\\instruction edit" => {
             " ← open INSTRUCTION.md in $EDITOR"
         }
-        "\\b"
-        | "\\be"
-        | "\\beh"
-        | "\\beha"
-        | "\\behav"
-        | "\\behavi"
-        | "\\behavio"
-        | "\\behavior"
-        | "\\behaviora"
-        | "\\behavioral" => " show|edit",
+        "\\b" | "\\be" | "\\beh" | "\\beha" | "\\behav" | "\\behavi" | "\\behavio"
+        | "\\behavior" | "\\behaviora" | "\\behavioral" => " show|edit",
         "\\behavioral s" | "\\behavioral sh" | "\\behavioral sho" | "\\behavioral show" => {
             " ← show behavioral line"
         }
@@ -745,15 +739,8 @@ fn autocomplete_slash(input: &str) -> Option<String> {
         | "\\authoriza" | "\\authorizat" | "\\authorizati" | "\\authorizatio" => "\\authorization",
         "\\in" | "\\ins" | "\\inst" | "\\instr" | "\\instru" | "\\instruc" | "\\instruct"
         | "\\instructi" | "\\instructio" => "\\instruction",
-        "\\b"
-        | "\\be"
-        | "\\beh"
-        | "\\beha"
-        | "\\behav"
-        | "\\behavi"
-        | "\\behavio"
-        | "\\behavior"
-        | "\\behaviora" => "\\behavioral",
+        "\\b" | "\\be" | "\\beh" | "\\beha" | "\\behav" | "\\behavi" | "\\behavio"
+        | "\\behavior" | "\\behaviora" => "\\behavioral",
         "\\co" | "\\con" | "\\conf" | "\\confi" => "\\config",
         _ => input,
     };

@@ -369,28 +369,36 @@ impl Viewport {
         for (msg_idx, msg) in self.messages.iter().enumerate() {
             match msg.role {
                 MessageRole::User => {
+                    let bg = Style::default().bg(theme.composer_bg);
+                    let text_style = theme.composer_text;
                     let content_lines: Vec<&str> = msg.content.split('\n').collect();
                     for (i, line_text) in content_lines.iter().enumerate() {
                         if i == 0 {
                             lines.push((
                                 msg_idx,
                                 Line::from(vec![
-                                    Span::styled("❯ ", theme.prompt_glyph),
-                                    Span::styled(line_text.to_string(), theme.user_message),
+                                    Span::styled("❯ ", theme.prompt_glyph.bg(theme.composer_bg)),
+                                    Span::styled(line_text.to_string(), text_style.bg(theme.composer_bg)),
                                 ]),
                             ));
                         } else if line_text.is_empty() {
-                            lines.push((msg_idx, Line::from("")));
+                            lines.push((msg_idx, Line::from(vec![
+                                Span::styled("  ", bg),
+                            ])));
                         } else {
                             lines.push((
                                 msg_idx,
                                 Line::from(vec![
-                                    Span::raw("  "),
-                                    Span::styled(line_text.to_string(), theme.user_message),
+                                    Span::styled("  ", bg),
+                                    Span::styled(line_text.to_string(), text_style.bg(theme.composer_bg)),
                                 ]),
                             ));
                         }
                     }
+                    // Blank separator line after user message (with background)
+                    lines.push((msg_idx, Line::from(vec![
+                        Span::styled("", bg),
+                    ])));
                 }
                 MessageRole::Agent => {
                     // Render thinking blocks (collapsed by default, Ctrl+O to expand)
