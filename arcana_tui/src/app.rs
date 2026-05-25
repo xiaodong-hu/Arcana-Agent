@@ -1259,40 +1259,59 @@ Hotkeys:\n\
                             {
                                 Some(approved) => approved,
                                 None => {
-                                    event_handle.abort();
-                                    tui.suspend()?;
-                                    let approval = approve_authority_request(request.clone())?;
-                                    tui.resume()?;
-                                    let (tx, rx, handle) = event::spawn_event_reader();
-                                    event_tx = tx;
-                                    events = rx;
-                                    event_handle = handle;
-
-                                    match approval {
-                                        AuthorityApproval::Approved(approved) => {
-                                            if let Some(key) =
-                                                authority_command_cache_key(&approved.request)
-                                            {
-                                                app.approved_commands.insert(key, approved.clone());
-                                            }
-                                            approved
+                                    // Auto-approve safe read-only operations without prompting
+                                    if is_safe_authority_request(&request) {
+                                        let details = authority_request_details(&request);
+                                        let safe = ApprovedAuthorityRequest {
+                                            request: confirmed_authority_request(request.clone()),
+                                            tool_type: details.tool_type,
+                                            description: details.target,
+                                            action: details.action.map(str::to_string),
+                                        };
+                                        if let Some(key) =
+                                            authority_command_cache_key(&safe.request)
+                                        {
+                                            app.approved_commands.insert(key, safe.clone());
                                         }
-                                        AuthorityApproval::Aborted {
-                                            response,
-                                            tool_type,
-                                            description,
-                                            action,
-                                        } => {
-                                            app.viewport.add_tool_call(ToolCall {
+                                        safe
+                                    } else {
+                                        event_handle.abort();
+                                        tui.suspend()?;
+                                        let approval =
+                                            approve_authority_request(request.clone())?;
+                                        tui.resume()?;
+                                        let (tx, rx, handle) = event::spawn_event_reader();
+                                        event_tx = tx;
+                                        events = rx;
+                                        event_handle = handle;
+
+                                        match approval {
+                                            AuthorityApproval::Approved(approved) => {
+                                                if let Some(key) =
+                                                    authority_command_cache_key(&approved.request)
+                                                {
+                                                    app.approved_commands
+                                                        .insert(key, approved.clone());
+                                                }
+                                                approved
+                                            }
+                                            AuthorityApproval::Aborted {
+                                                response,
                                                 tool_type,
                                                 description,
                                                 action,
-                                                result: Some(response.to_string()),
-                                                duration_ms: 0,
-                                                collapsed: false,
-                                            });
-                                            responses.push(response);
-                                            continue;
+                                            } => {
+                                                app.viewport.add_tool_call(ToolCall {
+                                                    tool_type,
+                                                    description,
+                                                    action,
+                                                    result: Some(response.to_string()),
+                                                    duration_ms: 0,
+                                                    collapsed: false,
+                                                });
+                                                responses.push(response);
+                                                continue;
+                                            }
                                         }
                                     }
                                 }
@@ -2339,6 +2358,67 @@ fn confirmed_authority_request(mut request: serde_json::Value) -> serde_json::Va
         }
     }
     request
+}
+
+/// Safe read-only commands that never need human confirmation.
+const SAFE_COMMANDS: &[&str] = &[
+    "echo", "ls", "cat", "head", "tail", "less", "more",
+    "grep", "egrep", "fgrep", "rg", "find", "locate",
+    "wc", "sort", "uniq", "cut", "tr", "awk", "sed",
+    "file", "stat", "du", "df", "which", "type", "whereis",
+    "pwd", "env", "printenv", "whoami", "hostname", "uname",
+    "date", "cal", "uptime", "ps", "top",
+    "git diff", "git status", "git log", "git show", "git branch",
+    "git tag", "git remote", "git stash list",
+    "tree",
+];
+
+/// Check whether an authority request can be auto-approved without human confirmation.
+fn is_safe_authority_request(request: &serde_json::Value) -> bool {
+    let op = request.get("op").and_then(|op| op.as_str()).unwrap_or("");
+
+    // Safe: read-only file operations within project workspace (not .arcana/, /etc, /proc)
+    if matches!(op, "read" | "read_text" | "query") {
+        if let Some(path) = request.get("path").and_then(|p| p.as_str()) {
+            if !path.contains(".arcana") && !path.starts_with("/etc") && !path.starts_with("/proc")
+            {
+                return true;
+            }
+        }
+    }
+
+    // Safe: well-known read-only shell commands
+    if op == "exec_shell" {
+        if let Some(command) = request.get("command").and_then(|c| c.as_str()) {
+            let first_line = command.lines().next().unwrap_or("").trim();
+            return SAFE_COMMANDS.iter().any(|safe| {
+                first_line == *safe
+                    || first_line.starts_with(&format!("{safe} "))
+                    || (safe.starts_with("git ") && first_line == *safe)
+            });
+        }
+    }
+
+    if op == "exec" {
+        let cmd = request.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+        return SAFE_COMMANDS.iter().any(|safe| {
+            cmd == *safe
+                || (safe.starts_with("git ") && cmd == "git" && {
+                    let args = request.get("args").and_then(|a| a.as_array());
+                    if let Some(args) = args {
+                        if let Some(sub) = args.first().and_then(|a| a.as_str()) {
+                            return matches!(
+                                sub, "diff" | "status" | "log" | "show" | "branch"
+                                    | "tag" | "remote" | "stash"
+                            );
+                        }
+                    }
+                    false
+                })
+        });
+    }
+
+    false
 }
 
 fn authority_command_cache_key(request: &serde_json::Value) -> Option<String> {

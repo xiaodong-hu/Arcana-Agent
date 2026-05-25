@@ -1,5 +1,6 @@
 use ratatui::prelude::*;
 use std::borrow::Cow;
+use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SynStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
@@ -12,6 +13,18 @@ const STRING_FG: Color = Color::Rgb(152, 195, 121);
 const KEYWORD_FG: Color = Color::Rgb(198, 120, 221);
 const NUMBER_FG: Color = Color::Rgb(209, 154, 102);
 
+/// Cached syntax definitions — loaded once, reused across all renders.
+fn syntax_set() -> &'static SyntaxSet {
+    static SS: OnceLock<SyntaxSet> = OnceLock::new();
+    SS.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn syntax_theme() -> &'static syntect::highlighting::Theme {
+    static TS: OnceLock<ThemeSet> = OnceLock::new();
+    let ts = TS.get_or_init(ThemeSet::load_defaults);
+    &ts.themes["base16-ocean.dark"]
+}
+
 /// Render a markdown text block into styled Lines.
 /// - Inline `code` -> blue without backticks.
 /// - Inline **bold** -> bold without stars.
@@ -21,9 +34,8 @@ pub fn render_markdown<'a>(text: &str, base_style: Style) -> Vec<Line<'a>> {
     let compacted = compact_newlines_preserving_code_blocks(text);
     let mut result: Vec<Line<'a>> = Vec::new();
     let mut lines_iter = compacted.lines().peekable();
-    let ss = SyntaxSet::load_defaults_newlines();
-    let ts = ThemeSet::load_defaults();
-    let theme = &ts.themes["base16-ocean.dark"];
+    let ss = syntax_set();
+    let theme = syntax_theme();
 
     while let Some(line) = lines_iter.next() {
         if let Some(lang) = fence_language(line) {
