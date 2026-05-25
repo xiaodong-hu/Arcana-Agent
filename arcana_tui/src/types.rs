@@ -12,6 +12,15 @@ pub enum ViewMode {
     DiffReview,
 }
 
+/// Separator kind for horizontal delimiter lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeparatorKind {
+    /// Full dialogue boundary (white).
+    Full,
+    /// Within-dialogue break — LLM continues after tool results (dark gray).
+    Partial,
+}
+
 /// A message in the conversation stream.
 #[derive(Debug, Clone)]
 pub struct Message {
@@ -20,6 +29,8 @@ pub struct Message {
     pub timestamp: DateTime<Utc>,
     pub thinking: Option<ThinkingBlock>,
     pub tool_calls: Vec<ToolCall>,
+    /// When set, this message is a horizontal separator line.
+    pub separator: Option<SeparatorKind>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,24 +128,41 @@ impl ResponseStats {
 }
 
 pub fn format_token_count(n: usize) -> String {
-    if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
-    else if n >= 1_000 { format!("{:.1}K", n as f64 / 1_000.0) }
-    else { format!("{}", n) }
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1_000.0)
+    } else {
+        format!("{}", n)
+    }
 }
 
 /// LLM error types for user-visible error display.
 #[derive(Debug, Clone)]
 pub enum LlmError {
-    RateLimit { retry_after_secs: Option<u64>, message: String },
-    ApiError { code: u16, message: String },
-    Timeout { message: String },
-    NetworkError { message: String },
+    RateLimit {
+        retry_after_secs: Option<u64>,
+        message: String,
+    },
+    ApiError {
+        code: u16,
+        message: String,
+    },
+    Timeout {
+        message: String,
+    },
+    NetworkError {
+        message: String,
+    },
 }
 
 impl std::fmt::Display for LlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::RateLimit { retry_after_secs, message } => {
+            Self::RateLimit {
+                retry_after_secs,
+                message,
+            } => {
                 write!(f, "Rate limit reached: {}", message)?;
                 if let Some(secs) = retry_after_secs {
                     write!(f, " (retry after {}s)", secs)?;

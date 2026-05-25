@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
 const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority System (AAS)
+AAS can be called to communicate with Arcana-Agent for command execution, filesystem access, web access, and authority registration. 
 
-Use AAS for command execution, filesystem access, web access, and authority
-registration. To call AAS, output one JSON object per line with an `op` field
-and no markdown wrapper. Arcana-Agent will ask the human when approval is
-needed, run approved requests, return JSON responses, and then you continue
-from those results.
+ALWAYS try to call tools and request authorities via AAS to get the answer if it materially improve the quality.
+
+To call AAS, output ONE SINGLE JSON object per line using AAS API below, with NO markdown wrapper. Arcana-Agent will take action from those JSON lines passed via AAS, return JSON responses to you, and then you MUST continue from the returned results. 
 
 ## Common Operations
 ```json
@@ -17,9 +16,7 @@ from those results.
 {"op":"exec_shell","command":"cargo test --all"}
 {"op":"fetch","url":"https://example.com","tag":null}
 ```
-
-Use `read_text` and `write_text` for normal text files. Use byte-level
-`read`/`write` with base64 content only when exact binary bytes are required.
+Use `read_text` and `write_text` for normal text files. Use byte-level `read`/`write` with base64 content only when exact binary bytes are required.
 
 ## Other Operations
 ```json
@@ -30,11 +27,7 @@ Use `read_text` and `write_text` for normal text files. Use byte-level
 {"op":"register_web","domain":"example.com"}
 {"op":"register_filesystem","access":"writable","path":"generated/**"}
 ```
-
-Always try to use available AAS tools and authorities when they materially
-improve the answer. For temporary scripts, use `.arcana/tmp/`. If AAS returns
-`{"status":"aborted",...}` or `{"status":"denied",...}`, report it and stop
-that operation. Do not retry or route around AAS.
+For temporary scripts, use `.arcana/tmp/`. If AAS returns `{"status":"aborted",...}` or `{"status":"denied",...}`, report it and stop that operation. Do not retry or route around AAS.
 "#;
 
 pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {

@@ -458,7 +458,7 @@ Type `\` then press `↓` to browse all commands with arrow keys; press `Esc` to
 | `Ctrl+Shift+M` | Modify last prompt |
 | `Ctrl+/` | Toggle query overlay |
 | `Ctrl+Y` | Toggle terminal text selection mode for native copy/select |
-| `Ctrl+X` | Toggle `[Arcana Run]` / `[Arcana Request]` panel expand/collapse |
+| `Ctrl+X` | Toggle `[Arcana Run]` shell panel expand/collapse |
 
 ### 6.2 Composer
 
