@@ -134,6 +134,7 @@ impl QueryOverlay {
                 timestamp: chrono::Utc::now(),
                 thinking,
                 tool_calls: Vec::new(),
+                separator: None,
             });
         }
         self.is_streaming = false;

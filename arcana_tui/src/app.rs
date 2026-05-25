@@ -716,8 +716,10 @@ Hotkeys:\n\
                                         }
                                     }
                                     cmd if cmd.starts_with("\\authorization add ") => {
-                                        let pattern =
-                                            cmd.strip_prefix("\\authorization add ").unwrap().trim();
+                                        let pattern = cmd
+                                            .strip_prefix("\\authorization add ")
+                                            .unwrap()
+                                            .trim();
                                         let path = dirs::home_dir()
                                             .unwrap_or_default()
                                             .join(".arcana/authority.toml");
@@ -953,6 +955,7 @@ Hotkeys:\n\
                                     timestamp: chrono::Utc::now(),
                                     thinking: None,
                                     tool_calls: Vec::new(),
+                                    separator: None,
                                 });
                                 app.overlay.is_streaming = true;
                                 app.generation_broken = false;
@@ -1035,6 +1038,7 @@ Hotkeys:\n\
                             timestamp: chrono::Utc::now(),
                             thinking: None,
                             tool_calls: Vec::new(),
+                            separator: None,
                         });
                         app.viewport.add_separator();
                         app.generation_broken = false;
@@ -1103,8 +1107,7 @@ Hotkeys:\n\
                                             if let Some(key) =
                                                 authority_command_cache_key(&approved.request)
                                             {
-                                                app.approved_commands
-                                                    .insert(key, approved.clone());
+                                                app.approved_commands.insert(key, approved.clone());
                                             }
                                             approved
                                         }
@@ -1157,7 +1160,7 @@ Hotkeys:\n\
                             );
                             responses.push(response);
                         }
-                        app.viewport.add_separator();
+                        app.viewport.add_sub_separator();
 
                         let response_text = responses
                             .into_iter()
@@ -1236,6 +1239,7 @@ Hotkeys:\n\
                             timestamp: chrono::Utc::now(),
                             thinking: None,
                             tool_calls: Vec::new(),
+                            separator: None,
                         });
                         app.generation_broken = false;
                         app.stream_started_at = None;
@@ -1255,6 +1259,7 @@ Hotkeys:\n\
                         timestamp: chrono::Utc::now(),
                         thinking: None,
                         tool_calls: Vec::new(),
+                        separator: None,
                     });
                 }
                 _ => {}
@@ -1456,7 +1461,7 @@ async fn send_single_shot_chat(
 }
 
 fn system_prompt_with_authority() -> String {
-    let base = "You are a helpful assistant.\n\nArcana-Agent AAS bridge: you cannot open the authority socket yourself. To call the Arcana Authority System, output one JSON object per line using the documented AAS API, with no markdown wrapper. Arcana-Agent will relay those JSON lines to AAS, return the JSON responses to you, and then you must continue from the returned results. Always try your best to use any available combination of AAS tools, commands, filesystem authority, and network authority that can materially improve the answer to the user's request. If AAS returns an aborted or denied response, report it and stop that operation.";
+    let base: &str = "You are a helpful assistant.\n\nArcana-Agent AAS bridge: you cannot open the authority socket yourself. To call the Arcana Authority System, output one JSON object per line using the documented AAS API, with no markdown wrapper. Arcana-Agent will relay those JSON lines to AAS, return the JSON responses to you, and then you MUST continue from the returned results. Always try your best to use any available combination of AAS tools, commands, filesystem authority, and network authority that can materially improve the answer to the user's request. If AAS returns an aborted or denied response, report it and stop that operation.";
     match fs::read_to_string(".arcana/authorized_prompt.md") {
         Ok(prompt) => format!("{}\n\n{}", prompt.trim_end(), base),
         Err(_) => base.to_string(),
@@ -2117,7 +2122,9 @@ fn authority_command_cache_key(request: &serde_json::Value) -> Option<String> {
     let op = op.strip_suffix("_confirmed").unwrap_or(op);
     match op {
         "exec_shell" => {
-            let command = request.get("command").and_then(|command| command.as_str())?;
+            let command = request
+                .get("command")
+                .and_then(|command| command.as_str())?;
             Some(format!("exec_shell\0{command}"))
         }
         "exec" => {

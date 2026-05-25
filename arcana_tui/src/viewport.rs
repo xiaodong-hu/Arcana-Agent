@@ -87,16 +87,27 @@ impl Viewport {
         banner.push('\n');
         banner.push_str("    The Arcane Agent — Memory · Skills · Authority\n");
         banner.push('\n');
-        banner.push_str(&format!("    Model:      {:<20} Session:    new\n", model_name));
-        banner.push_str(&format!("    Provider:   {:<20} Sub-agents: query + spawn\n", "deepseek"));
-        banner.push_str(&format!("                                                     "));
-        banner.push_str(&format!("                                                     "));
+        banner.push_str(&format!(
+            "    Model:      {:<20} Session:    new\n",
+            model_name
+        ));
+        banner.push_str(&format!(
+            "    Provider:   {:<20} Sub-agents: query + spawn\n",
+            "deepseek"
+        ));
+        banner.push_str(&format!(
+            "                                                     "
+        ));
+        banner.push_str(&format!(
+            "                                                     "
+        ));
         self.messages.push(Message {
             role: MessageRole::System,
             content: banner,
             timestamp: chrono::Utc::now(),
             thinking: None,
             tool_calls: Vec::new(),
+            separator: None,
         });
     }
 
@@ -143,7 +154,8 @@ impl Viewport {
         stats: Option<crate::types::ResponseStats>,
         force_agent_message: bool,
     ) {
-        if force_agent_message || !self.streaming_text.is_empty() || self.streaming_think.is_some() {
+        if force_agent_message || !self.streaming_text.is_empty() || self.streaming_think.is_some()
+        {
             let thinking = self.streaming_think.take().map(|t| ThinkingBlock {
                 content: t.content.trim_end_matches('\n').to_string(),
                 token_count: t.token_count,
@@ -159,6 +171,7 @@ impl Viewport {
                 timestamp: chrono::Utc::now(),
                 thinking,
                 tool_calls: Vec::new(),
+                separator: None,
             };
             self.messages.push(msg);
         }
@@ -169,6 +182,7 @@ impl Viewport {
                 timestamp: chrono::Utc::now(),
                 thinking: None,
                 tool_calls: Vec::new(),
+                separator: None,
             });
         }
         self.is_streaming = false;
@@ -187,12 +201,15 @@ impl Viewport {
         self.scroll_offset = 0;
     }
 
-    /// Toggle all tool-call panels expand/collapse (Ctrl+X).
+    /// Toggle all Shell tool-call panels expand/collapse (Ctrl+X).
+    /// Non-Shell (authority request) panels are always compact and unaffected.
     pub fn toggle_tool_calls(&mut self) {
         self.tool_calls_collapsed = !self.tool_calls_collapsed;
         for msg in &mut self.messages {
             for tc in &mut msg.tool_calls {
-                tc.collapsed = self.tool_calls_collapsed;
+                if tc.tool_type == ToolType::Shell {
+                    tc.collapsed = self.tool_calls_collapsed;
+                }
             }
         }
         self.scroll_offset = 0;
@@ -200,8 +217,16 @@ impl Viewport {
 
     /// Attach a tool-call panel to the most recent agent response.
     pub fn add_tool_call(&mut self, mut tool_call: ToolCall) {
-        tool_call.collapsed = self.tool_calls_collapsed;
-        if let Some(msg) = self.messages.iter_mut().rev().find(|msg| msg.role == MessageRole::Agent) {
+        // Only Shell tool calls respect the global collapse toggle.
+        if tool_call.tool_type == ToolType::Shell {
+            tool_call.collapsed = self.tool_calls_collapsed;
+        }
+        if let Some(msg) = self
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|msg| msg.role == MessageRole::Agent)
+        {
             msg.tool_calls.push(tool_call);
         }
         if self.auto_scroll {
@@ -211,7 +236,10 @@ impl Viewport {
 
     /// Fill the latest pending tool-call panel with its result.
     pub fn finish_latest_tool_call(&mut self, result: String, duration_ms: u64) {
-        if let Some(tc) = self.messages.iter_mut().rev()
+        if let Some(tc) = self
+            .messages
+            .iter_mut()
+            .rev()
             .filter(|msg| msg.role == MessageRole::Agent)
             .flat_map(|msg| msg.tool_calls.iter_mut().rev())
             .find(|tc| tc.result.is_none())
@@ -236,7 +264,9 @@ impl Viewport {
 
     /// Get indices of all user messages (each represents a dialogue).
     pub fn dialogue_indices(&self) -> Vec<usize> {
-        self.messages.iter().enumerate()
+        self.messages
+            .iter()
+            .enumerate()
             .filter(|(_, m)| m.role == MessageRole::User)
             .map(|(i, _)| i)
             .collect()
@@ -257,6 +287,7 @@ impl Viewport {
             timestamp: chrono::Utc::now(),
             thinking: None,
             tool_calls: Vec::new(),
+            separator: None,
         });
         self.auto_scroll = true;
         self.scroll_offset = 0;
@@ -270,12 +301,13 @@ impl Viewport {
             timestamp: chrono::Utc::now(),
             thinking: None,
             tool_calls: Vec::new(),
+            separator: None,
         });
         self.auto_scroll = true;
         self.scroll_offset = 0;
     }
 
-    /// Add a horizontal separator line.
+    /// Add a horizontal separator line (full dialogue boundary).
     pub fn add_separator(&mut self) {
         self.messages.push(Message {
             role: MessageRole::System,
@@ -283,6 +315,19 @@ impl Viewport {
             timestamp: chrono::Utc::now(),
             thinking: None,
             tool_calls: Vec::new(),
+            separator: Some(crate::types::SeparatorKind::Full),
+        });
+    }
+
+    /// Add a sub-separator for within-dialogue breaks (dark gray).
+    pub fn add_sub_separator(&mut self) {
+        self.messages.push(Message {
+            role: MessageRole::System,
+            content: "─".repeat(80),
+            timestamp: chrono::Utc::now(),
+            thinking: None,
+            tool_calls: Vec::new(),
+            separator: Some(crate::types::SeparatorKind::Partial),
         });
     }
 
@@ -322,23 +367,28 @@ impl Viewport {
         let mut lines: Vec<(usize, Line)> = Vec::new();
 
         for (msg_idx, msg) in self.messages.iter().enumerate() {
-
             match msg.role {
                 MessageRole::User => {
                     let content_lines: Vec<&str> = msg.content.split('\n').collect();
                     for (i, line_text) in content_lines.iter().enumerate() {
                         if i == 0 {
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::styled("❯ ", theme.prompt_glyph),
-                                Span::styled(line_text.to_string(), theme.user_message),
-                            ])));
+                            lines.push((
+                                msg_idx,
+                                Line::from(vec![
+                                    Span::styled("❯ ", theme.prompt_glyph),
+                                    Span::styled(line_text.to_string(), theme.user_message),
+                                ]),
+                            ));
                         } else if line_text.is_empty() {
                             lines.push((msg_idx, Line::from("")));
                         } else {
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::raw("  "),
-                                Span::styled(line_text.to_string(), theme.user_message),
-                            ])));
+                            lines.push((
+                                msg_idx,
+                                Line::from(vec![
+                                    Span::raw("  "),
+                                    Span::styled(line_text.to_string(), theme.user_message),
+                                ]),
+                            ));
                         }
                     }
                 }
@@ -346,25 +396,46 @@ impl Viewport {
                     // Render thinking blocks (collapsed by default, Ctrl+O to expand)
                     if let Some(ref think) = msg.thinking {
                         if think.collapsed {
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::styled(
-                                    format!("▸ Thinking ({} tokens, {:.1}s) ",
-                                        think.token_count, think.duration_ms as f64 / 1000.0),
-                                    theme.thinking_block,
-                                ),
-                                Span::styled("ctrl+o to expand", Style::default().fg(Color::Rgb(160, 160, 170))),
-                            ])));
+                            lines.push((
+                                msg_idx,
+                                Line::from(vec![
+                                    Span::styled(
+                                        format!(
+                                            "▸ Thinking ({} tokens, {:.1}s) ",
+                                            think.token_count,
+                                            think.duration_ms as f64 / 1000.0
+                                        ),
+                                        theme.thinking_block,
+                                    ),
+                                    Span::styled(
+                                        "ctrl+o to expand",
+                                        Style::default().fg(Color::Rgb(160, 160, 170)),
+                                    ),
+                                ]),
+                            ));
                             lines.push((msg_idx, Line::from("")));
                         } else {
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::styled(
-                                    format!("▾ Thinking ({} tokens, {:.1}s) ",
-                                        think.token_count, think.duration_ms as f64 / 1000.0),
-                                    theme.thinking_block,
-                                ),
-                                Span::styled("ctrl+o to collapse", Style::default().fg(Color::Rgb(160, 160, 170))),
-                            ])));
-                            for md_line in crate::render_md::render_markdown(&think.content, theme.thinking_block) {
+                            lines.push((
+                                msg_idx,
+                                Line::from(vec![
+                                    Span::styled(
+                                        format!(
+                                            "▾ Thinking ({} tokens, {:.1}s) ",
+                                            think.token_count,
+                                            think.duration_ms as f64 / 1000.0
+                                        ),
+                                        theme.thinking_block,
+                                    ),
+                                    Span::styled(
+                                        "ctrl+o to collapse",
+                                        Style::default().fg(Color::Rgb(160, 160, 170)),
+                                    ),
+                                ]),
+                            ));
+                            for md_line in crate::render_md::render_markdown(
+                                &think.content,
+                                theme.thinking_block,
+                            ) {
                                 // Indent thinking content
                                 let mut spans = vec![Span::raw("  ".to_string())];
                                 spans.extend(md_line.spans);
@@ -376,93 +447,170 @@ impl Viewport {
 
                     // Render tool-call panels
                     for tc in &msg.tool_calls {
-                        let label = match tc.tool_type {
-                            ToolType::Shell => "Shell",
-                            ToolType::File => "File",
-                            ToolType::Search => "Search",
-                            ToolType::Web => "Web",
-                            ToolType::Other => "Tool",
-                        };
-                        let status = if tc.result.is_some() {
-                            format!("finished in {:.1}s", tc.duration_ms as f64 / 1000.0)
-                        } else {
-                            "waiting".to_string()
-                        };
                         let (heading, heading_color) = if tc.tool_type == ToolType::Shell {
                             ("[Arcana Run]: ", PIGMENT_GREEN)
                         } else {
                             ("[Arcana Request]: ", AMBER_SAE_ECE)
                         };
-                        if tc.collapsed {
-                            lines.push((msg_idx, Line::from(vec![
-                                Span::styled(heading, Style::default().fg(heading_color).add_modifier(Modifier::BOLD)),
-                                Span::styled(format!("{label} ({status}) "), Style::default().fg(heading_color)),
-                                Span::styled("ctrl+x to expand", Style::default().fg(TOOL_HINT)),
-                            ])));
+
+                        // ── Shell: full panel with expand/collapse, timing, result ──
+                        if tc.tool_type == ToolType::Shell {
+                            let status = if tc.result.is_some() {
+                                format!("finished in {:.1}s", tc.duration_ms as f64 / 1000.0)
+                            } else {
+                                "waiting".to_string()
+                            };
+                            if tc.collapsed {
+                                lines.push((
+                                    msg_idx,
+                                    Line::from(vec![
+                                        Span::styled(
+                                            heading,
+                                            Style::default()
+                                                .fg(heading_color)
+                                                .add_modifier(Modifier::BOLD),
+                                        ),
+                                        Span::styled(
+                                            format!("Shell ({status}) "),
+                                            Style::default().fg(heading_color),
+                                        ),
+                                        Span::styled(
+                                            "ctrl+x to expand",
+                                            Style::default().fg(TOOL_HINT),
+                                        ),
+                                    ]),
+                                ));
+                                continue;
+                            }
+
+                            lines.push((
+                                msg_idx,
+                                Line::from(vec![
+                                    Span::styled(
+                                        heading,
+                                        Style::default()
+                                            .fg(heading_color)
+                                            .add_modifier(Modifier::BOLD),
+                                    ),
+                                    Span::styled(
+                                        format!("Shell ({status}) "),
+                                        Style::default().fg(heading_color),
+                                    ),
+                                    Span::styled("ctrl+x to fold", Style::default().fg(TOOL_HINT)),
+                                ]),
+                            ));
+                            for line in render_tool_command_lines(tc, theme) {
+                                lines.push((msg_idx, line));
+                            }
+                            if let Some(result) = &tc.result {
+                                if !result.is_empty() {
+                                    lines.push((msg_idx, Line::from("")));
+                                }
+                                for line in result.lines() {
+                                    lines.push((
+                                        msg_idx,
+                                        Line::from(vec![
+                                            Span::raw("  "),
+                                            Span::styled(
+                                                line.to_string(),
+                                                Style::default().fg(TOOL_OUTPUT),
+                                            ),
+                                        ]),
+                                    ));
+                                }
+                            }
+                            lines.push((msg_idx, Line::from("")));
                             continue;
                         }
 
-                        lines.push((msg_idx, Line::from(vec![
-                            Span::styled(heading, Style::default().fg(heading_color).add_modifier(Modifier::BOLD)),
-                            Span::styled(format!("{label} ({status}) "), Style::default().fg(heading_color)),
-                            Span::styled("ctrl+x to fold", Style::default().fg(TOOL_HINT)),
-                        ])));
-                        for line in render_tool_command_lines(tc, theme) {
-                            lines.push((msg_idx, line));
-                        }
-                        if let Some(result) = &tc.result {
-                            if !result.is_empty() {
-                                lines.push((msg_idx, Line::from("")));
-                            }
-                            for line in result.lines() {
-                                lines.push((msg_idx, Line::from(vec![
-                                    Span::raw("  "),
-                                    Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
-                                ])));
-                            }
-                        }
-                        lines.push((msg_idx, Line::from("")));
+                        // ── Non-Shell: compact single line, no timing, no collapse ──
+                        let verb = match tc.tool_type {
+                            ToolType::File => "File Access to",
+                            ToolType::Web => "Web Access to",
+                            ToolType::Search => "Search for",
+                            _ => "Request for",
+                        };
+                        lines.push((
+                            msg_idx,
+                            Line::from(vec![
+                                Span::styled(
+                                    heading,
+                                    Style::default()
+                                        .fg(heading_color)
+                                        .add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(
+                                    format!("{verb} `{}`", tc.description),
+                                    Style::default().fg(heading_color),
+                                ),
+                                Span::raw("."),
+                            ]),
+                        ));
                     }
 
                     // Render response content with markdown formatting
-                    for md_line in crate::render_md::render_markdown(&msg.content, theme.agent_response) {
+                    for md_line in
+                        crate::render_md::render_markdown(&msg.content, theme.agent_response)
+                    {
                         lines.push((msg_idx, md_line));
                     }
                     lines.push((msg_idx, Line::from("")));
                 }
                 MessageRole::System => {
+                    // Check for separator first (new typed field)
+                    if let Some(sep_kind) = msg.separator {
+                        let sep_str = "─".repeat(inner.width as usize);
+                        let color = match sep_kind {
+                            crate::types::SeparatorKind::Full => Color::White,
+                            crate::types::SeparatorKind::Partial => Color::Rgb(80, 80, 90),
+                        };
+                        lines.push((
+                            msg_idx,
+                            Line::from(Span::styled(sep_str, Style::default().fg(color))),
+                        ));
+                        continue;
+                    }
+
                     let is_cost = msg.content.starts_with("Cost:");
-                    let is_sep = msg.content.starts_with('─');
                     let is_banner = msg.content.contains("█████") || msg.content.contains("╔══");
                     if is_cost {
                         lines.push((msg_idx, Line::from("")));
                     }
-                    if is_sep {
-                        let sep_str = "─".repeat(inner.width as usize);
-                        lines.push((msg_idx, Line::from(Span::styled(
-                            sep_str, Style::default().fg(Color::White)
-                        ))));
-                    } else if is_banner {
+                    if is_banner {
                         // Render banner with gradient colors
                         let content_lines: Vec<&str> = msg.content.lines().collect();
-                        let art_lines = content_lines.iter().take_while(|l| {
-                            let t = l.trim_start();
-                            t.is_empty() || t.starts_with('░') || t.starts_with('█') || t.starts_with('╚')
-                        }).count();
+                        let art_lines = content_lines
+                            .iter()
+                            .take_while(|l| {
+                                let t = l.trim_start();
+                                t.is_empty()
+                                    || t.starts_with('░')
+                                    || t.starts_with('█')
+                                    || t.starts_with('╚')
+                            })
+                            .count();
                         for (i, line) in content_lines.iter().enumerate() {
                             if line.is_empty() {
                                 lines.push((msg_idx, Line::from("")));
                             } else if i < art_lines {
                                 let t = i as f32 / art_lines.max(1) as f32;
-                                let color = interpolate_color(theme.banner_gradient.0, theme.banner_gradient.1, t);
-                                lines.push((msg_idx, Line::from(Span::styled(
-                                    line.to_string(),
-                                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                                ))));
+                                let color = interpolate_color(
+                                    theme.banner_gradient.0,
+                                    theme.banner_gradient.1,
+                                    t,
+                                );
+                                lines.push((
+                                    msg_idx,
+                                    Line::from(Span::styled(
+                                        line.to_string(),
+                                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                                    )),
+                                ));
                             } else {
-                                lines.push((msg_idx, Line::from(Span::styled(
-                                    line.to_string(), theme.dim,
-                                ))));
+                                lines.push((
+                                    msg_idx,
+                                    Line::from(Span::styled(line.to_string(), theme.dim)),
+                                ));
                             }
                         }
                     } else {
@@ -472,7 +620,8 @@ impl Viewport {
                             Style::default().fg(Color::White)
                         };
                         for line in msg.content.lines() {
-                            lines.push((msg_idx, Line::from(Span::styled(line.to_string(), style))));
+                            lines
+                                .push((msg_idx, Line::from(Span::styled(line.to_string(), style))));
                         }
                     }
                 }
@@ -485,21 +634,39 @@ impl Viewport {
             if let Some(ref think) = self.streaming_think {
                 let elapsed = think.start_time.elapsed().as_secs_f64();
                 if self.think_collapsed {
-                    let header = format!("▸ Thinking ({} tokens, {:.1}s) ",
-                        think.token_count, elapsed);
-                    lines.push((stream_idx, Line::from(vec![
-                        Span::styled(header, theme.thinking_block),
-                        Span::styled("ctrl+o to expand", Style::default().fg(Color::Rgb(160, 160, 170))),
-                    ])));
+                    let header = format!(
+                        "▸ Thinking ({} tokens, {:.1}s) ",
+                        think.token_count, elapsed
+                    );
+                    lines.push((
+                        stream_idx,
+                        Line::from(vec![
+                            Span::styled(header, theme.thinking_block),
+                            Span::styled(
+                                "ctrl+o to expand",
+                                Style::default().fg(Color::Rgb(160, 160, 170)),
+                            ),
+                        ]),
+                    ));
                 } else {
-                    let header = format!("▾ Thinking ({} tokens, {:.1}s) ",
-                        think.token_count, elapsed);
-                    lines.push((stream_idx, Line::from(vec![
-                        Span::styled(header, theme.thinking_block),
-                        Span::styled("ctrl+o to collapse", Style::default().fg(Color::Rgb(160, 160, 170))),
-                    ])));
+                    let header = format!(
+                        "▾ Thinking ({} tokens, {:.1}s) ",
+                        think.token_count, elapsed
+                    );
+                    lines.push((
+                        stream_idx,
+                        Line::from(vec![
+                            Span::styled(header, theme.thinking_block),
+                            Span::styled(
+                                "ctrl+o to collapse",
+                                Style::default().fg(Color::Rgb(160, 160, 170)),
+                            ),
+                        ]),
+                    ));
 
-                    for md_line in crate::render_md::render_markdown(&think.content, theme.thinking_block) {
+                    for md_line in
+                        crate::render_md::render_markdown(&think.content, theme.thinking_block)
+                    {
                         let mut spans = vec![Span::raw("  ".to_string())];
                         spans.extend(md_line.spans);
                         lines.push((stream_idx, Line::from(spans)));
@@ -508,7 +675,9 @@ impl Viewport {
             }
 
             if !self.streaming_text.is_empty() {
-                for md_line in crate::render_md::render_markdown(&self.streaming_text, theme.agent_response) {
+                for md_line in
+                    crate::render_md::render_markdown(&self.streaming_text, theme.agent_response)
+                {
                     lines.push((stream_idx, md_line));
                 }
             }
@@ -518,7 +687,9 @@ impl Viewport {
         let panel_width = inner.width as usize;
         let mut wrapped: Vec<(usize, Line)> = Vec::new();
         for (idx, line) in lines {
-            let line_w: usize = line.spans.iter()
+            let line_w: usize = line
+                .spans
+                .iter()
                 .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
                 .sum();
             if line_w <= panel_width || panel_width == 0 {
@@ -532,14 +703,19 @@ impl Viewport {
                     let mut w = 0;
                     for (i, ch) in remaining.char_indices() {
                         let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                        if w + cw > panel_width { break; }
+                        if w + cw > panel_width {
+                            break;
+                        }
                         w += cw;
                         byte_end = i + ch.len_utf8();
                     }
                     if byte_end == 0 && !remaining.is_empty() {
                         byte_end = remaining.chars().next().map(|c| c.len_utf8()).unwrap_or(1);
                     }
-                    wrapped.push((idx, Line::from(Span::styled(remaining[..byte_end].to_string(), style))));
+                    wrapped.push((
+                        idx,
+                        Line::from(Span::styled(remaining[..byte_end].to_string(), style)),
+                    ));
                     remaining = &remaining[byte_end..];
                 }
             }
@@ -637,9 +813,11 @@ fn render_tool_command_lines<'a>(tool_call: &ToolCall, theme: &Theme) -> Vec<Lin
             if spans.is_empty() {
                 line_spans.push(Span::raw(""));
             } else {
-                line_spans.extend(spans.into_iter().map(|span| {
-                    Span::styled(span.text, Style::default().fg(span.fg))
-                }));
+                line_spans.extend(
+                    spans
+                        .into_iter()
+                        .map(|span| Span::styled(span.text, Style::default().fg(span.fg))),
+                );
             }
             Line::from(line_spans)
         })
