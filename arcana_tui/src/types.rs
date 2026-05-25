@@ -10,7 +10,37 @@ pub enum ViewMode {
     QueryOverlay,
     /// Diff review pending
     DiffReview,
+    /// Agent mode selection overlay
+    ModeSelection,
 }
+
+/// Agent operation mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentMode {
+    /// Q&A only — no tool calls or authority requests.
+    Ask,
+    /// Full agent — LLM may call tools via AAS.
+    Agent,
+}
+
+impl AgentMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Ask => "Ask",
+            Self::Agent => "Agent",
+        }
+    }
+
+    pub fn description(&self) -> &'static str {
+        match self {
+            Self::Ask => "Q&A mode — no tool calls or authority requests",
+            Self::Agent => "Full agent mode — LLM may call tools via AAS",
+        }
+    }
+}
+
+/// All available agent modes (for the \mode selection UI).
+pub const ALL_MODES: &[AgentMode] = &[AgentMode::Ask, AgentMode::Agent];
 
 /// Separator kind for horizontal delimiter lines.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

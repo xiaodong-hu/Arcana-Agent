@@ -382,6 +382,7 @@ Type `\` then press `↓` to browse all commands with arrow keys. Press `Esc` to
 | `\quit` | Exit session |
 | `\help` | Show all commands and hotkeys |
 | `\clear` | Clear viewport |
+| `\mode` | Switch agent mode (Ask / Agent) |
 | `\status` | Show model/token info |
 | `\usage` | Session token/cost statistics |
 | `\working_dir` | Show current working directory |
@@ -394,7 +395,6 @@ Type `\` then press `↓` to browse all commands with arrow keys. Press `Esc` to
 | `\authorization edit` | Open authority.toml in `$EDITOR` |
 | `\instruction show` | Show `~/.arcana/INSTRUCTION.md` |
 | `\instruction edit` | Open INSTRUCTION.md in `$EDITOR` |
-| `\help` | Show all commands and hotkeys |
 
 ---
 

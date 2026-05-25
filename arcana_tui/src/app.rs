@@ -44,6 +44,12 @@ struct App {
     stream_handle: Option<tokio::task::JoinHandle<()>>,
     /// Exact shell commands approved by the human in this session.
     approved_commands: HashMap<String, ApprovedAuthorityRequest>,
+    /// Current agent operation mode (Ask vs Agent).
+    agent_mode: AgentMode,
+    /// Whether mode selection UI is active (triggered by \mode).
+    mode_selection_active: bool,
+    /// Index into ALL_MODES for the currently highlighted mode.
+    mode_selection_index: usize,
 }
 
 impl App {
@@ -72,6 +78,9 @@ impl App {
             stream_started_at: None,
             stream_handle: None,
             approved_commands: HashMap::new(),
+            agent_mode: AgentMode::Agent,
+            mode_selection_active: false,
+            mode_selection_index: 0,
         }
     }
 
@@ -369,6 +378,7 @@ impl App {
             &self.skills,
             &self.agents,
             &self.tasks,
+            self.agent_mode,
         );
 
         self.viewport.render(frame, chunks[1], &self.theme);
@@ -381,8 +391,64 @@ impl App {
             self.overlay.render(frame, area, &self.theme);
         }
 
+        // --- Mode selection floating panel ---
+        if self.mode_selection_active {
+            render_mode_selection(frame, area, self.mode_selection_index, &self.theme);
+        }
+
         render_toasts(frame, area, &self.toasts);
     }
+}
+
+fn render_mode_selection(frame: &mut Frame, area: Rect, selected: usize, theme: &Theme) {
+    let panel_w = 52u16;
+    let panel_h = (ALL_MODES.len() as u16 + 4);
+    let x = area.width.saturating_sub(panel_w) / 2;
+    let y = area.height.saturating_sub(panel_h) / 2;
+    let panel_area = Rect::new(x, y, panel_w, panel_h);
+
+    // Clear background
+    frame.render_widget(ratatui::widgets::Clear, panel_area);
+
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(Color::Rgb(180, 160, 60)))
+        .title(" Select Agent Mode ")
+        .title_style(Style::default().fg(Color::Rgb(180, 160, 60)).add_modifier(Modifier::BOLD));
+    frame.render_widget(block, panel_area);
+
+    let inner = panel_area.inner(ratatui::layout::Margin::new(1, 1));
+    let mut lines: Vec<Line> = Vec::new();
+
+    for (i, mode) in ALL_MODES.iter().enumerate() {
+        let is_selected = i == selected;
+        let prefix = if is_selected { "❯ " } else { "  " };
+        let style = if is_selected {
+            Style::default()
+                .fg(Color::Rgb(180, 160, 60))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Rgb(160, 160, 170))
+        };
+        lines.push(Line::from(vec![
+            Span::styled(prefix, style),
+            Span::styled(mode.label(), style),
+            Span::raw("  "),
+            Span::styled(
+                mode.description(),
+                Style::default().fg(Color::Rgb(120, 120, 130)),
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter select  ·  Esc cancel",
+        Style::default().fg(Color::Rgb(120, 120, 130)),
+    )));
+
+    let paragraph = ratatui::widgets::Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
 }
 
 fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[Toast]) {
@@ -535,7 +601,7 @@ pub async fn interactive(
 
     // Conversation history for LLM context
     let mut conversation: Vec<serde_json::Value> =
-        vec![serde_json::json!({"role": "system", "content": system_prompt_with_authority()})];
+        vec![serde_json::json!({"role": "system", "content": build_system_prompt(app.agent_mode)})];
 
     loop {
         tui.draw(|frame| app.render(frame))?;
@@ -544,6 +610,53 @@ pub async fn interactive(
             match evt {
                 AppEvent::Key(key) => {
                     let action = classify_key(&key);
+
+                    // --- Mode selection overlay (triggered by \mode) ---
+                    if app.mode_selection_active {
+                        match action {
+                            KeyAction::Up => {
+                                if app.mode_selection_index == 0 {
+                                    app.mode_selection_index = ALL_MODES.len() - 1;
+                                } else {
+                                    app.mode_selection_index -= 1;
+                                }
+                                continue;
+                            }
+                            KeyAction::Down => {
+                                if app.mode_selection_index + 1 >= ALL_MODES.len() {
+                                    app.mode_selection_index = 0;
+                                } else {
+                                    app.mode_selection_index += 1;
+                                }
+                                continue;
+                            }
+                            KeyAction::Enter => {
+                                let new_mode = ALL_MODES[app.mode_selection_index];
+                                app.agent_mode = new_mode;
+                                app.mode_selection_active = false;
+                                // Refresh system prompt in conversation
+                                conversation[0] = serde_json::json!({
+                                    "role": "system",
+                                    "content": build_system_prompt(app.agent_mode)
+                                });
+                                app.viewport.add_error_message(format!(
+                                    "Mode switched to: {} — {}",
+                                    new_mode.label(),
+                                    new_mode.description()
+                                ));
+                                continue;
+                            }
+                            KeyAction::Escape => {
+                                app.mode_selection_active = false;
+                                continue;
+                            }
+                            _ => {
+                                // Any other key dismisses the selection
+                                app.mode_selection_active = false;
+                            }
+                        }
+                    }
+
                     match app.mode {
                         ViewMode::Main => {
                             // --- Command selection mode (↑↓ browse, Esc exit) ---
@@ -597,6 +710,7 @@ pub async fn interactive(
                                             "Commands:\n\
   \\quit          Exit session\n\
   \\clear         Clear viewport\n\
+  \\mode          Switch agent mode (Ask / Agent)\n\
   \\status        Show model/token info\n\
   \\usage         Session token/cost stats\n\
   \\working_dir   Show current working directory\n\
@@ -626,6 +740,13 @@ Hotkeys:\n\
   Ctrl+c         Clear prompt"
                                                 .into(),
                                         );
+                                    }
+                                    "\\mode" => {
+                                        app.mode_selection_active = true;
+                                        app.mode_selection_index = ALL_MODES
+                                            .iter()
+                                            .position(|m| *m == app.agent_mode)
+                                            .unwrap_or(0);
                                     }
                                     "\\status" => {
                                         app.viewport.add_error_message(format!(
@@ -809,7 +930,7 @@ Hotkeys:\n\
                                         refresh_authorized_prompt_file();
                                         conversation[0] = serde_json::json!({
                                             "role": "system",
-                                            "content": system_prompt_with_authority()
+                                            "content": build_system_prompt(app.agent_mode)
                                         });
                                         app.viewport.add_error_message(format!(
                                             "Instruction reloaded from {}",
@@ -975,6 +1096,7 @@ Hotkeys:\n\
                             }
                         }
                         ViewMode::DiffReview => {}
+                        ViewMode::ModeSelection => {}
                     }
                 }
                 AppEvent::Paste(text) => {
@@ -1340,7 +1462,7 @@ pub async fn single_shot(
     let thinking_config = &config.agents.main.thinking;
     let client = reqwest::Client::new();
     let mut messages = vec![
-        serde_json::json!({"role": "system", "content": system_prompt_with_authority()}),
+        serde_json::json!({"role": "system", "content": build_system_prompt(AgentMode::Agent)}),
         serde_json::json!({"role": "user", "content": user_content}),
     ];
     let mut last_usage = None;
@@ -1460,11 +1582,37 @@ async fn send_single_shot_chat(
     Ok(resp.json().await?)
 }
 
-fn system_prompt_with_authority() -> String {
-    let base: &str = "You are a helpful assistant.\n\nArcana-Agent AAS bridge: you cannot open the authority socket yourself. To call the Arcana Authority System, output one JSON object per line using the documented AAS API, with no markdown wrapper. Arcana-Agent will relay those JSON lines to AAS, return the JSON responses to you, and then you MUST continue from the returned results. Always try your best to use any available combination of AAS tools, commands, filesystem authority, and network authority that can materially improve the answer to the user's request. If AAS returns an aborted or denied response, report it and stop that operation.";
-    match fs::read_to_string(".arcana/authorized_prompt.md") {
-        Ok(prompt) => format!("{}\n\n{}", prompt.trim_end(), base),
-        Err(_) => base.to_string(),
+fn build_system_prompt(mode: AgentMode) -> String {
+    match mode {
+        AgentMode::Ask => {
+            "You are a professional research assistant. \
+             Answer profoundly, pedagogically, and concisely."
+                .to_string()
+        }
+        AgentMode::Agent => {
+            // 1. Structured authority config (generated by AAS daemon)
+            let authority_config =
+                fs::read_to_string(".arcana/authorized_prompt.md").unwrap_or_default();
+
+            // 2. AAS API reference (pure, no behavioral instructions)
+            let instruction = crate::instruction::load_or_create().unwrap_or_default();
+
+            // 3. Behavioral line — tells the LLM when to use tools
+            let behavior = "\
+You are Arcana Agent, an autonomous AI assistant with tool-call capabilities. \
+ALWAYS try to call tools and request authorities via AAS to get the answer \
+if it materially improves the quality.";
+
+            let mut parts: Vec<&str> = Vec::new();
+            if !authority_config.trim().is_empty() {
+                parts.push(authority_config.trim());
+            }
+            if !instruction.trim().is_empty() {
+                parts.push(instruction.trim());
+            }
+            parts.push(behavior);
+            parts.join("\n\n")
+        }
     }
 }
 

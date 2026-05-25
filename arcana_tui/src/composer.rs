@@ -9,6 +9,7 @@ pub const ALL_COMMANDS: &[&str] = &[
     "\\quit",
     "\\help",
     "\\clear",
+    "\\mode",
     "\\status",
     "\\usage",
     "\\working_dir",

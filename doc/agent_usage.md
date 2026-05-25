@@ -428,6 +428,7 @@ Type `\` then press `↓` to browse all commands with arrow keys; press `Esc` to
 | `\help` | Show all available commands |
 | `\quit` | Exit session |
 | `\clear` | Clear viewport |
+| `\mode` | Switch agent mode (Ask / Agent) |
 | `\status` | Show model/token info |
 | `\usage` | Session token/cost statistics |
 | `\working_dir` | Show current working directory |

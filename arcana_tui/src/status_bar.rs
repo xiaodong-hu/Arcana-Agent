@@ -2,7 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::theme::Theme;
-use crate::types::{StatusData, PanelState, TaskInfo, SkillInfo, SubAgentInfo, TaskStatus};
+use crate::types::{AgentMode, StatusData, PanelState, TaskInfo, SkillInfo, SubAgentInfo, TaskStatus};
 
 /// Render the status bar. Supports multiline expansion via panel_state toggles.
 /// Default: expanded (multiline). Ctrl+S skills, Ctrl+A agents.
@@ -15,11 +15,12 @@ pub fn render_status_bar(
     skills: &[SkillInfo],
     agents: &[SubAgentInfo],
     tasks: &[TaskInfo],
+    agent_mode: AgentMode,
 ) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Line 1: model + context progress + short counts (always shown)
-    lines.push(build_main_line(status, tasks, skills, agents));
+    lines.push(build_main_line(status, tasks, skills, agents, agent_mode));
 
     // Expanded sections (tasks are now in the dedicated panel below viewport)
     if panel_state.skills_expanded && !skills.is_empty() {
@@ -47,7 +48,7 @@ pub fn status_bar_height(
     h
 }
 
-fn build_main_line<'a>(status: &StatusData, tasks: &[TaskInfo], skills: &[SkillInfo], agents: &[SubAgentInfo]) -> Line<'a> {
+fn build_main_line<'a>(status: &StatusData, tasks: &[TaskInfo], skills: &[SkillInfo], agents: &[SubAgentInfo], agent_mode: AgentMode) -> Line<'a> {
     let filled = if status.tokens_max > 0 {
         ((status.tokens_used as f64 / status.tokens_max as f64) * 10.0).round() as usize
     } else { 0 };
@@ -66,6 +67,15 @@ fn build_main_line<'a>(status: &StatusData, tasks: &[TaskInfo], skills: &[SkillI
 
     let spans = vec![
         Span::styled(format!(" {} ", status.model_name), Style::default().fg(Color::White)),
+        Span::styled("│", separator),
+        Span::styled(
+            format!(" {} ", agent_mode.label()),
+            Style::default().fg(if matches!(agent_mode, AgentMode::Agent) {
+                Color::Rgb(0, 200, 100)
+            } else {
+                Color::Rgb(160, 160, 200)
+            }),
+        ),
         Span::styled("│", separator),
         Span::styled(format!(" {} {} ", bar, tokens_str), Style::default().fg(light_gray)),
         Span::styled("│", separator),

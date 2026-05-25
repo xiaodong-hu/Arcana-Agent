@@ -3,9 +3,7 @@ use std::path::PathBuf;
 const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority System (AAS)
 AAS can be called to communicate with Arcana-Agent for command execution, filesystem access, web access, and authority registration. 
 
-ALWAYS try to call tools and request authorities via AAS to get the answer if it materially improve the quality.
-
-To call AAS, output ONE SINGLE JSON object per line using AAS API below, with NO markdown wrapper. Arcana-Agent will take action from those JSON lines passed via AAS, return JSON responses to you, and then you MUST continue from the returned results. 
+To call AAS, output ONE SINGLE JSON object per line using the AAS API below, with NO markdown wrapper. Arcana-Agent will take action from those JSON lines passed via AAS, return JSON responses to you, and then you MUST continue from the returned results. 
 
 ## Common Operations
 ```json
