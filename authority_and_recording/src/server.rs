@@ -251,6 +251,7 @@ impl Server {
             original,
             proposed: proposed.to_string(),
             diff,
+            review_path: review_path.to_string_lossy().to_string(),
         })
     }
 

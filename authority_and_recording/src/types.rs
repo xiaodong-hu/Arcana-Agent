@@ -127,6 +127,8 @@ pub enum Response {
         proposed: String,
         /// Unified diff between original and proposed.
         diff: String,
+        /// Path to the temp file holding the proposed content (for in-place editing).
+        review_path: String,
     },
     #[serde(rename = "instruction")]
     Instruction { content: String },

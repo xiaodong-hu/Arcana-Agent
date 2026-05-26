@@ -1414,6 +1414,8 @@ Hotkeys:\n\
                                 let diff = response["diff"].as_str().unwrap_or("");
                                 let path = response["path"].as_str().unwrap_or("");
                                 let proposed = response["proposed"].as_str().unwrap_or("");
+                                let original = response["original"].as_str().unwrap_or("");
+                                let review_path = response["review_path"].as_str().unwrap_or("");
 
                                 // Mark write access tool call as OK
                                 app.viewport.finish_latest_tool_call(
@@ -1437,8 +1439,14 @@ Hotkeys:\n\
                                 event_handle.abort();
 
                                 // Inline review confirmation (appends prompt to change tool call)
-                                let review_result =
-                                    tui_review_write(&mut app, &mut tui, path, proposed)?;
+                                let review_result = tui_review_write(
+                                    &mut app,
+                                    &mut tui,
+                                    path,
+                                    original,
+                                    review_path,
+                                    socket_path,
+                                )?;
 
                                 // Respawn main event reader
                                 let (tx2, rx2, handle2) = event::spawn_event_reader();
@@ -1446,14 +1454,14 @@ Hotkeys:\n\
                                 events = rx2;
                                 event_handle = handle2;
 
-                                // Update change tool call with decision
+                                // Update change tool call with decision.
+                                // Read the current diff from the result (may have been
+                                // regenerated after edits) and append the decision keyword.
                                 let decision = match &review_result {
                                     WriteReviewResult::Accept => "Allowed.",
                                     WriteReviewResult::Edit(_) => "Edited.",
                                     WriteReviewResult::Reject => "Rejected.",
                                 };
-                                // Manually update the change tool call result (finish_latest
-                                // won't find it since result is already set)
                                 if let Some(msg) = app
                                     .viewport
                                     .messages
@@ -1462,7 +1470,9 @@ Hotkeys:\n\
                                     .find(|m| m.role == MessageRole::Agent)
                                 {
                                     if let Some(tc) = msg.tool_calls.last_mut() {
-                                        tc.result = Some(format!("{}\n{}", diff, decision));
+                                        let current_diff = tc.result.clone().unwrap_or_default();
+                                        tc.result = Some(format!("{}\n{}", current_diff, decision));
+                                        app.viewport.invalidate_render_cache();
                                     }
                                 }
 
@@ -2318,13 +2328,61 @@ enum WriteReviewResult {
 
 /// Inline diff review: append confirmation prompt to the latest (change) tool call,
 /// wait for Accept/Edit/Reject while keeping scroll/Ctrl+Y/Ctrl+P functional.
+/// On [e]dit, the user edits the AAS temp file directly; after :wq the diff is
+/// regenerated and the confirmation reappears — user may edit many times.
+/// Only [y/Enter] or [n] finalises the review.
 fn tui_review_write(
     app: &mut App,
     tui: &mut Tui,
-    _path: &str,
-    proposed: &str,
+    path: &str,
+    _original: &str, // reserved for future local-diff generation
+    review_path: &str,
+    socket_path: &Path,
 ) -> Result<WriteReviewResult, Box<dyn std::error::Error>> {
-    // Append confirmation prompt to the change review tool call
+    let mut ever_edited = false;
+    let mut current_content = String::new(); // latest content from temp file
+
+    // Helper: replace the change tool call result with a fresh diff + __REVIEW__ sentinel.
+    let set_review_prompt = |app: &mut App, diff: &str| {
+        if let Some(msg) = app
+            .viewport
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == MessageRole::Agent)
+        {
+            if let Some(tc) = msg.tool_calls.last_mut() {
+                tc.result = Some(format!(
+                    "{}\n__REVIEW__:Allow for Change?  Yes [y/Enter]  |  Edit [e]  |  Reject [n]",
+                    diff
+                ));
+            }
+        }
+        app.viewport.invalidate_render_cache();
+    };
+
+    // Helper: regenerate diff+confirmation after an edit by calling AAS again.
+    let regenerate_diff = |app: &mut App,
+                           tui: &mut Tui,
+                           socket_path: &Path,
+                           path: &str,
+                           content: &str|
+     -> Result<String, Box<dyn std::error::Error>> {
+        let req = serde_json::json!({
+            "op": "write_text_confirmed",
+            "path": path,
+            "content": content
+        });
+        let resp = authority_request(socket_path, req).unwrap_or_else(
+            |e| serde_json::json!({"status":"denied","reason":format!("AAS bridge failed: {e}")}),
+        );
+        let new_diff = resp["diff"].as_str().unwrap_or("").to_string();
+        set_review_prompt(app, &new_diff);
+        tui.draw(|frame| app.render(frame))?;
+        Ok(new_diff)
+    };
+
+    // Append __REVIEW__ sentinel to the existing result (diff set by caller)
     if let Some(msg) = app
         .viewport
         .messages
@@ -2341,10 +2399,12 @@ fn tui_review_write(
             }
         }
     }
+    // Invalidate render cache so the __REVIEW__ line appears on the next draw
+    app.viewport.invalidate_render_cache();
     tui.draw(|frame| app.render(frame))?;
 
     // Use event::spawn_event_reader for reliable event reading
-    let (tx, mut rx, handle) = event::spawn_event_reader();
+    let (mut tx, mut rx, mut handle) = event::spawn_event_reader();
 
     let result = loop {
         let evt = tokio::task::block_in_place(|| rx.blocking_recv());
@@ -2356,22 +2416,40 @@ fn tui_review_write(
                 let action = classify_key(&key);
 
                 match action {
-                    KeyAction::Char('y') | KeyAction::Enter => break WriteReviewResult::Accept,
+                    KeyAction::Char('y') | KeyAction::Enter => {
+                        if ever_edited && !current_content.is_empty() {
+                            break WriteReviewResult::Edit(current_content);
+                        }
+                        break WriteReviewResult::Accept;
+                    }
                     KeyAction::Char('n') | KeyAction::Escape => break WriteReviewResult::Reject,
                     KeyAction::Char('e') => {
+                        // Edit the AAS temp file directly so mutations persist across re-edits
                         handle.abort();
                         tui.suspend()?;
-                        let tmp = std::env::temp_dir().join("arcana_review_edit");
-                        std::fs::write(&tmp, proposed)?;
                         let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vim".into());
-                        let _ = std::process::Command::new(&editor).arg(&tmp).status();
-                        let edited = std::fs::read_to_string(&tmp).unwrap_or_default();
-                        let _ = std::fs::remove_file(&tmp);
+                        let _ = std::process::Command::new(&editor)
+                            .arg(review_path)
+                            .status();
+                        let edited = std::fs::read_to_string(review_path).unwrap_or_default();
                         tui.resume()?;
-                        if edited.trim().is_empty() || edited.trim() == proposed.trim() {
+
+                        if edited.trim().is_empty() {
                             break WriteReviewResult::Reject;
                         }
-                        break WriteReviewResult::Edit(edited.trim().to_string());
+
+                        ever_edited = true;
+                        current_content = edited.trim().to_string();
+
+                        // Re-spawn event reader
+                        let (tx2, rx2, handle2) = event::spawn_event_reader();
+                        // Reassign locals (shadowing rx/handle in the loop)
+                        let _ = std::mem::replace(&mut tx, tx2);
+                        let _ = std::mem::replace(&mut rx, rx2);
+                        let _ = std::mem::replace(&mut handle, handle2);
+
+                        // Regenerate diff via AAS and re-render with fresh confirmation
+                        let _ = regenerate_diff(app, tui, socket_path, path, &current_content);
                     }
                     // Scroll
                     KeyAction::FocusDown | KeyAction::Char('j') => {
@@ -2413,6 +2491,15 @@ fn tui_review_write(
                         tui.draw(|f| app.render(f))?;
                     }
                 }
+            }
+            // Mouse scroll — critical for reading long diffs before deciding
+            Some(AppEvent::ScrollUp(_)) => {
+                app.viewport.scroll_up(3);
+                tui.draw(|f| app.render(f))?;
+            }
+            Some(AppEvent::ScrollDown(_)) => {
+                app.viewport.scroll_down(3);
+                tui.draw(|f| app.render(f))?;
             }
             Some(_) => {}
             None => break WriteReviewResult::Reject,
