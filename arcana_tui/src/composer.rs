@@ -452,7 +452,9 @@ impl Composer {
 
     /// Render the composer.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::default().borders(Borders::TOP).bg(theme.composer_bg);
+        // No border — background alone distinguishes the input area,
+        // matching the user-message panel appearance in the viewport.
+        let block = Block::default().bg(theme.composer_bg);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 

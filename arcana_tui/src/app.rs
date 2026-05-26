@@ -52,6 +52,12 @@ struct App {
     mode_selection_index: usize,
     /// Whether terminal-native text selection is active (toggled by Ctrl+Y).
     text_selection_active: bool,
+    /// Pending authority confirmations (processed one per keypress).
+    confirmation_queue: Vec<serde_json::Value>,
+    /// Authority requests still to process in the current batch.
+    pending_requests: Vec<serde_json::Value>,
+    /// Responses collected so far in the current batch.
+    pending_responses: Vec<serde_json::Value>,
 }
 
 impl App {
@@ -84,6 +90,9 @@ impl App {
             mode_selection_active: false,
             mode_selection_index: 0,
             text_selection_active: false,
+            confirmation_queue: Vec::new(),
+            pending_requests: Vec::new(),
+            pending_responses: Vec::new(),
         }
     }
 
@@ -362,19 +371,33 @@ impl App {
             .height_for_width(area.width)
             .min(area.height / 2);
 
+        // Layout: viewport fills, composer + status at bottom
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Length(status_h),
-                Constraint::Min(5),
-                Constraint::Length(task_panel_h),
-                Constraint::Length(composer_h),
+                Constraint::Min(5),                     // viewport fills
+                Constraint::Length(task_panel_h),        // task panel
+                Constraint::Length(composer_h + 1),      // composer + gap
+                Constraint::Length(status_h),            // status bar at bottom
             ])
             .split(area);
 
+        self.viewport.render(frame, chunks[0], &self.theme);
+
+        panels::render_task_panel(frame, chunks[1], &self.panel_state, &self.tasks);
+
+        // Composer area: slight lift (gap above)
+        let composer_area = Rect::new(
+            chunks[2].x,
+            chunks[2].y + 1,
+            chunks[2].width,
+            chunks[2].height.saturating_sub(1),
+        );
+        self.composer.render(frame, composer_area, &self.theme);
+
         status_bar::render_status_bar(
             frame,
-            chunks[0],
+            chunks[3],
             &self.theme,
             &self.status,
             &self.panel_state,
@@ -383,12 +406,6 @@ impl App {
             &self.tasks,
             self.agent_mode,
         );
-
-        self.viewport.render(frame, chunks[1], &self.theme);
-
-        panels::render_task_panel(frame, chunks[2], &self.panel_state, &self.tasks);
-
-        self.composer.render(frame, chunks[3], &self.theme);
 
         if self.mode == ViewMode::QueryOverlay {
             self.overlay.render(frame, area, &self.theme);
@@ -1295,14 +1312,18 @@ Hotkeys:\n\
                                         }
                                         safe
                                     } else {
+                                        // TUI-based inline confirmation (no shell prompt)
                                         event_handle.abort();
-                                        tui.suspend()?;
-                                        let approval = approve_authority_request(request.clone())?;
-                                        tui.resume()?;
-                                        let (tx, rx, handle) = event::spawn_event_reader();
-                                        event_tx = tx;
-                                        events = rx;
-                                        event_handle = handle;
+                                        let (tx, mut rx, handle) = event::spawn_event_reader();
+                                        let approval = tui_approve_authority_request(
+                                            &mut app, &mut tui, &tx, &mut rx, request.clone(),
+                                        )?;
+                                        handle.abort();
+                                        // Respawn the main event reader
+                                        let (tx2, rx2, handle2) = event::spawn_event_reader();
+                                        event_tx = tx2;
+                                        events = rx2;
+                                        event_handle = handle2;
 
                                         match approval {
                                             AuthorityApproval::Approved(approved) => {
@@ -2122,6 +2143,115 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&copy;", "©")
         .replace("&reg;", "®")
         .replace("&trade;", "™")
+}
+
+/// TUI-based inline confirmation: shows the request in the viewport with a
+/// confirmation panel, keeps the UI fully visible, and waits for a keypress.
+fn tui_approve_authority_request(
+    app: &mut App,
+    tui: &mut Tui,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    mut request: serde_json::Value,
+) -> Result<AuthorityApproval, Box<dyn std::error::Error>> {
+    loop {
+        let details = authority_request_details(&request);
+
+        // Add tool call with confirmation prompt
+        let confirm_idx = app.viewport.messages.iter().rev()
+            .find(|m| m.role == MessageRole::Agent)
+            .map(|m| m.tool_calls.len())
+            .unwrap_or(0);
+
+        app.viewport.add_tool_call(ToolCall {
+            tool_type: details.tool_type,
+            description: details.target.clone(),
+            action: details.action.map(str::to_string),
+            result: Some(format!("?  Yes [y/Enter]  |  Edit [e]  |  No [n]")),
+            duration_ms: 0,
+            collapsed: false,
+        });
+
+        // Render with confirmation visible
+        tui.draw(|frame| app.render(frame))?;
+
+        // Wait for a key (blocking — we're inside a synchronous function)
+        let answer = loop {
+            match rx.blocking_recv() {
+                Some(AppEvent::Key(key)) => {
+                    let action = classify_key(&key);
+                    match action {
+                        KeyAction::Char('y') | KeyAction::Enter => break "y",
+                        KeyAction::Char('n') | KeyAction::Escape => break "n",
+                        KeyAction::Char('e') => break "e",
+                        _ => {
+                            tui.draw(|frame| app.render(frame))?;
+                        }
+                    }
+                }
+                Some(_) => {} // ignore ticks, resizes, etc.
+                None => break "n",
+            }
+        };
+
+        // Update the tool call with result
+        if let Some(msg) = app.viewport.messages.iter_mut().rev()
+            .find(|m| m.role == MessageRole::Agent)
+        {
+            if let Some(tc) = msg.tool_calls.last_mut() {
+                match answer {
+                    "y" => {
+                        tc.result = Some("OK.".to_string());
+                        return Ok(AuthorityApproval::Approved(ApprovedAuthorityRequest {
+                            request: confirmed_authority_request(request),
+                            tool_type: details.tool_type,
+                            description: details.target,
+                            action: details.action.map(str::to_string),
+                        }));
+                    }
+                    "e" => {
+                        match edit_authority_target(&details.target) {
+                            Ok(edited) if !edited.trim().is_empty() => {
+                                request = edit_authority_request_target(request, edited.trim());
+                                // Remove the temporary tool call and loop again
+                                msg.tool_calls.pop();
+                                continue;
+                            }
+                            Ok(_) => {
+                                tc.result = Some("Aborted (empty edit).".to_string());
+                                return Ok(aborted_authority_approval(
+                                    details.tool_type, details.target, details.action,
+                                    details.abort_error_type,
+                                    format!("{} edit produced an empty request", details.kind),
+                                ));
+                            }
+                            Err(e) => {
+                                tc.result = Some(format!("Aborted (edit failed: {e})."));
+                                return Ok(aborted_authority_approval(
+                                    details.tool_type, details.target, details.action,
+                                    details.abort_error_type,
+                                    format!("{} edit failed: {e}", details.kind),
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        tc.result = Some("Aborted.".to_string());
+                        return Ok(aborted_authority_approval(
+                            details.tool_type, details.target.clone(), details.action,
+                            details.abort_error_type,
+                            format!("{} aborted by user: {}", details.kind, details.target),
+                        ));
+                    }
+                }
+            }
+        }
+        // Fallback
+        return Ok(aborted_authority_approval(
+            details.tool_type, details.target, details.action,
+            details.abort_error_type, "confirmation lost".into(),
+        ));
+    }
 }
 
 fn approve_authority_request(

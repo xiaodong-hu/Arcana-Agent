@@ -9,8 +9,8 @@ const TOOL_OUTPUT: Color = Color::Rgb(185, 185, 195);
 const PIGMENT_GREEN: Color = Color::Rgb(0, 165, 80);
 const AMBER_SAE_ECE: Color = Color::Rgb(255, 126, 0);
 const AWESOME_RED: Color = Color::Rgb(255, 33, 82);
-const BU_RED: Color = Color::Rgb(204, 0, 0);        // Boston University Red
-const DIFF_ADDED_BG: Color = Color::Rgb(0, 55, 30);  // dark green bg for added lines
+const BU_RED: Color = Color::Rgb(204, 0, 0); // Boston University Red
+const DIFF_ADDED_BG: Color = Color::Rgb(0, 55, 30); // dark green bg for added lines
 const DIFF_REMOVED_BG: Color = Color::Rgb(70, 10, 10); // dark red bg for removed lines
 
 /// Viewport state: manages scroll position and message rendering.
@@ -547,27 +547,39 @@ impl Viewport {
                                     let diff = result[diff_start..].trim();
                                     // Render pre-diff content (stdout/stderr)
                                     for line in pre.lines() {
-                                        lines.push((msg_idx, Line::from(vec![
-                                            Span::raw("  "),
-                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
-                                        ])));
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
                                     }
                                     if !pre.is_empty() && !diff.is_empty() {
                                         lines.push((msg_idx, Line::from("")));
                                     }
                                     // Render styled diff
                                     let file_path = &tc.description;
-                                    for styled_line in render_styled_diff(diff, file_path) {
+                                    for styled_line in render_styled_diff(diff, file_path, inner.width.saturating_sub(2)) {
                                         let mut spans = vec![Span::raw("  ")];
                                         spans.extend(styled_line.spans);
                                         lines.push((msg_idx, Line::from(spans)));
                                     }
                                 } else {
                                     for line in result.lines() {
-                                        lines.push((msg_idx, Line::from(vec![
-                                            Span::raw("  "),
-                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
-                                        ])));
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
                                     }
                                 }
                             }
@@ -631,25 +643,37 @@ impl Viewport {
                                     let pre = extra[..diff_start].trim();
                                     let diff = extra[diff_start..].trim();
                                     for line in pre.lines() {
-                                        lines.push((msg_idx, Line::from(vec![
-                                            Span::raw("  "),
-                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
-                                        ])));
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
                                     }
                                     if !pre.is_empty() && !diff.is_empty() {
                                         lines.push((msg_idx, Line::from("")));
                                     }
-                                    for styled_line in render_styled_diff(diff, &tc.description) {
+                                    for styled_line in render_styled_diff(diff, &tc.description, inner.width.saturating_sub(2)) {
                                         let mut spans = vec![Span::raw("  ")];
                                         spans.extend(styled_line.spans);
                                         lines.push((msg_idx, Line::from(spans)));
                                     }
                                 } else {
                                     for line in extra.lines() {
-                                        lines.push((msg_idx, Line::from(vec![
-                                            Span::raw("  "),
-                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
-                                        ])));
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
                                     }
                                 }
                                 lines.push((msg_idx, Line::from("")));
@@ -991,7 +1015,7 @@ fn expanded_request_result(result: &str) -> Option<&str> {
 
 /// Render a unified git diff as styled lines with line numbers, tree-sitter
 /// highlighting, and background colors. Strips git metadata headers.
-pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str) -> Vec<Line<'a>> {
+pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str, panel_width: u16) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut old_line: u32 = 0;
     let mut new_line: u32 = 0;
@@ -1067,9 +1091,18 @@ pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str) -> Vec<Line<'a>>
             .unwrap_or_else(|| "     ".to_string());
 
         lines.push(Line::from(vec![
-            Span::styled(ln_str, Style::default().fg(Color::Rgb(100, 100, 110)).bg(bg)),
-            Span::styled(format!("{}", prefix), Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)),
-            Span::styled(content, Style::default().fg(Color::Rgb(210, 210, 220)).bg(bg)),
+            Span::styled(
+                ln_str,
+                Style::default().fg(Color::Rgb(100, 100, 110)).bg(bg),
+            ),
+            Span::styled(
+                format!("{}", prefix),
+                Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                content,
+                Style::default().fg(Color::Rgb(210, 210, 220)).bg(bg),
+            ),
         ]));
     }
 
@@ -1109,6 +1142,22 @@ pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str) -> Vec<Line<'a>>
                     lines[i] = Line::from(new_spans);
                 }
             }
+        }
+    }
+
+    // Pad each line to fill panel_width with the appropriate background
+    let fill_w = panel_width as usize;
+    for line in &mut lines {
+        let used_w: usize = line.spans.iter()
+            .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        let pad = fill_w.saturating_sub(used_w);
+        if pad > 0 {
+            let last_bg = line.spans.last()
+                .map(|s| s.style.bg)
+                .flatten()
+                .unwrap_or(Color::Reset);
+            line.spans.push(Span::styled(" ".repeat(pad), Style::default().bg(last_bg)));
         }
     }
 
