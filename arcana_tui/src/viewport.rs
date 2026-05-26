@@ -9,6 +9,9 @@ const TOOL_OUTPUT: Color = Color::Rgb(185, 185, 195);
 const PIGMENT_GREEN: Color = Color::Rgb(0, 165, 80);
 const AMBER_SAE_ECE: Color = Color::Rgb(255, 126, 0);
 const AWESOME_RED: Color = Color::Rgb(255, 33, 82);
+const BU_RED: Color = Color::Rgb(204, 0, 0);        // Boston University Red
+const DIFF_ADDED_BG: Color = Color::Rgb(0, 55, 30);  // dark green bg for added lines
+const DIFF_REMOVED_BG: Color = Color::Rgb(70, 10, 10); // dark red bg for removed lines
 
 /// Viewport state: manages scroll position and message rendering.
 #[derive(Debug)]
@@ -472,7 +475,7 @@ impl Viewport {
                         let (heading, heading_color) = if tc.tool_type == ToolType::Shell {
                             ("[Arcana Run]: ", PIGMENT_GREEN)
                         } else {
-                            ("[Arcana Request]: ", AMBER_SAE_ECE)
+                            ("[Arcana Request]: ", PIGMENT_GREEN)
                         };
 
                         // ── Shell: full panel with inline command, timing, result ──
@@ -538,17 +541,34 @@ impl Viewport {
                                 if !result.is_empty() {
                                     lines.push((msg_idx, Line::from("")));
                                 }
-                                for line in result.lines() {
-                                    lines.push((
-                                        msg_idx,
-                                        Line::from(vec![
+                                // Split result into pre-diff content and diff section
+                                if let Some(diff_start) = result.find("diff --git") {
+                                    let pre = result[..diff_start].trim();
+                                    let diff = result[diff_start..].trim();
+                                    // Render pre-diff content (stdout/stderr)
+                                    for line in pre.lines() {
+                                        lines.push((msg_idx, Line::from(vec![
                                             Span::raw("  "),
-                                            Span::styled(
-                                                line.to_string(),
-                                                Style::default().fg(TOOL_OUTPUT),
-                                            ),
-                                        ]),
-                                    ));
+                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
+                                        ])));
+                                    }
+                                    if !pre.is_empty() && !diff.is_empty() {
+                                        lines.push((msg_idx, Line::from("")));
+                                    }
+                                    // Render styled diff
+                                    let file_path = &tc.description;
+                                    for styled_line in render_styled_diff(diff, file_path) {
+                                        let mut spans = vec![Span::raw("  ")];
+                                        spans.extend(styled_line.spans);
+                                        lines.push((msg_idx, Line::from(spans)));
+                                    }
+                                } else {
+                                    for line in result.lines() {
+                                        lines.push((msg_idx, Line::from(vec![
+                                            Span::raw("  "),
+                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
+                                        ])));
+                                    }
                                 }
                             }
                             lines.push((msg_idx, Line::from("")));
@@ -584,7 +604,7 @@ impl Viewport {
                             Span::styled(
                                 action.to_string(),
                                 Style::default()
-                                    .fg(AWESOME_RED)
+                                    .fg(AMBER_SAE_ECE)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(suffix, Style::default().fg(heading_color)),
@@ -607,17 +627,30 @@ impl Viewport {
                         lines.push((msg_idx, Line::from(request_spans)));
                         if let Some(result) = &tc.result {
                             if let Some(extra) = expanded_request_result(result) {
-                                for line in extra.lines() {
-                                    lines.push((
-                                        msg_idx,
-                                        Line::from(vec![
+                                if let Some(diff_start) = extra.find("diff --git") {
+                                    let pre = extra[..diff_start].trim();
+                                    let diff = extra[diff_start..].trim();
+                                    for line in pre.lines() {
+                                        lines.push((msg_idx, Line::from(vec![
                                             Span::raw("  "),
-                                            Span::styled(
-                                                line.to_string(),
-                                                Style::default().fg(TOOL_OUTPUT),
-                                            ),
-                                        ]),
-                                    ));
+                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
+                                        ])));
+                                    }
+                                    if !pre.is_empty() && !diff.is_empty() {
+                                        lines.push((msg_idx, Line::from("")));
+                                    }
+                                    for styled_line in render_styled_diff(diff, &tc.description) {
+                                        let mut spans = vec![Span::raw("  ")];
+                                        spans.extend(styled_line.spans);
+                                        lines.push((msg_idx, Line::from(spans)));
+                                    }
+                                } else {
+                                    for line in extra.lines() {
+                                        lines.push((msg_idx, Line::from(vec![
+                                            Span::raw("  "),
+                                            Span::styled(line.to_string(), Style::default().fg(TOOL_OUTPUT)),
+                                        ])));
+                                    }
                                 }
                                 lines.push((msg_idx, Line::from("")));
                             }
@@ -956,7 +989,159 @@ fn expanded_request_result(result: &str) -> Option<&str> {
     }
 }
 
-/// Linearly interpolate between two RGB colors.
+/// Render a unified git diff as styled lines with line numbers, tree-sitter
+/// highlighting, and background colors. Strips git metadata headers.
+pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str) -> Vec<Line<'a>> {
+    let mut lines: Vec<Line> = Vec::new();
+    let mut old_line: u32 = 0;
+    let mut new_line: u32 = 0;
+
+    // Detect language from file path for tree-sitter highlighting
+    let lang = crate::highlight::detect_language(file_path).unwrap_or("");
+
+    // Collect non-header lines and their kind for highlighting
+    let mut code_lines: Vec<(DiffLineKind, String)> = Vec::new();
+
+    for line in diff_text.lines() {
+        let trimmed = line.trim();
+
+        // Skip git metadata headers
+        if trimmed.is_empty()
+            || trimmed.starts_with("diff --git")
+            || trimmed.starts_with("index ")
+            || trimmed.starts_with("--- ")
+            || trimmed.starts_with("+++ ")
+        {
+            continue;
+        }
+
+        // Parse @@ hunk header for line numbers
+        if trimmed.starts_with("@@") {
+            if let Some((old, new)) = parse_hunk_header(trimmed) {
+                old_line = old;
+                new_line = new;
+            }
+            continue;
+        }
+
+        let (kind, prefix, ln) = if line.starts_with('+') {
+            (DiffLineKind::Added, "+", Some(new_line))
+        } else if line.starts_with('-') {
+            (DiffLineKind::Removed, "-", Some(old_line))
+        } else {
+            (DiffLineKind::Context, " ", Some(new_line))
+        };
+
+        let content = if line.len() > 1 {
+            line[1..].to_string()
+        } else {
+            String::new()
+        };
+
+        // Track line numbers
+        match kind {
+            DiffLineKind::Added => new_line = new_line.saturating_add(1),
+            DiffLineKind::Removed => old_line = old_line.saturating_add(1),
+            DiffLineKind::Context => {
+                old_line = old_line.saturating_add(1);
+                new_line = new_line.saturating_add(1);
+            }
+            _ => {}
+        }
+
+        code_lines.push((kind, content.clone()));
+
+        let bg = match kind {
+            DiffLineKind::Added => DIFF_ADDED_BG,
+            DiffLineKind::Removed => DIFF_REMOVED_BG,
+            _ => Color::Reset,
+        };
+        let fg = match kind {
+            DiffLineKind::Added => Color::Rgb(0, 200, 100),
+            DiffLineKind::Removed => Color::Rgb(255, 80, 80),
+            _ => Color::Rgb(180, 180, 190),
+        };
+
+        let ln_str = ln
+            .map(|n| format!("{:>4} ", n))
+            .unwrap_or_else(|| "     ".to_string());
+
+        lines.push(Line::from(vec![
+            Span::styled(ln_str, Style::default().fg(Color::Rgb(100, 100, 110)).bg(bg)),
+            Span::styled(format!("{}", prefix), Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD)),
+            Span::styled(content, Style::default().fg(Color::Rgb(210, 210, 220)).bg(bg)),
+        ]));
+    }
+
+    // Apply tree-sitter highlighting if we have a known language and content
+    if !lang.is_empty() && !code_lines.is_empty() {
+        let source: String = code_lines
+            .iter()
+            .map(|(_, content)| format!("{}\n", content))
+            .collect();
+        let highlighted = crate::highlight::highlight_lines(&source, lang);
+
+        for (i, (kind, _)) in code_lines.iter().enumerate() {
+            if i >= lines.len() {
+                break;
+            }
+            let bg = match kind {
+                DiffLineKind::Added => DIFF_ADDED_BG,
+                DiffLineKind::Removed => DIFF_REMOVED_BG,
+                _ => Color::Reset,
+            };
+            if let Some(hl_spans) = highlighted.get(i) {
+                if !hl_spans.is_empty() {
+                    // Keep prefix (line number + +/-), replace content spans
+                    let prefix_spans: Vec<Span> = lines[i]
+                        .spans
+                        .iter()
+                        .take(2) // line number + prefix
+                        .cloned()
+                        .collect();
+                    let mut new_spans = prefix_spans;
+                    for s in hl_spans {
+                        new_spans.push(Span::styled(
+                            s.text.clone(),
+                            Style::default().fg(s.fg).bg(bg),
+                        ));
+                    }
+                    lines[i] = Line::from(new_spans);
+                }
+            }
+        }
+    }
+
+    lines
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffLineKind {
+    Added,
+    Removed,
+    Context,
+}
+
+fn parse_hunk_header(header: &str) -> Option<(u32, u32)> {
+    // "@@ -old_start,old_count +new_start,new_count @@"
+    let inner = header.strip_prefix("@@")?.strip_suffix("@@")?.trim();
+    let mut parts = inner.split_whitespace();
+    let old_part = parts.next()?; // -old_start,old_count
+    let new_part = parts.next()?; // +new_start,new_count
+    let old_start = old_part
+        .strip_prefix('-')?
+        .split(',')
+        .next()?
+        .parse::<u32>()
+        .ok()?;
+    let new_start = new_part
+        .strip_prefix('+')?
+        .split(',')
+        .next()?
+        .parse::<u32>()
+        .ok()?;
+    Some((old_start, new_start))
+}
 fn interpolate_color(from: Color, to: Color, t: f32) -> Color {
     match (from, to) {
         (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {
