@@ -226,10 +226,9 @@ impl Viewport {
         self.invalidate_render_cache();
     }
 
-    /// Toggle all Shell tool-call panels expand/collapse + diff truncation (Ctrl+X).
+    /// Toggle all Shell tool-call panels expand/collapse (Ctrl+X).
     pub fn toggle_tool_calls(&mut self) {
         self.tool_calls_collapsed = !self.tool_calls_collapsed;
-        self.diff_collapsed = !self.diff_collapsed;
         for msg in &mut self.messages {
             for tc in &mut msg.tool_calls {
                 if tc.tool_type == ToolType::Shell {
@@ -237,6 +236,13 @@ impl Viewport {
                 }
             }
         }
+        self.scroll_offset = 0;
+        self.invalidate_render_cache();
+    }
+
+    /// Toggle diff panel truncation (Ctrl+P) — collapse/expand beyond 20 lines.
+    pub fn toggle_diff(&mut self) {
+        self.diff_collapsed = !self.diff_collapsed;
         self.scroll_offset = 0;
         self.invalidate_render_cache();
     }

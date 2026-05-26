@@ -114,6 +114,9 @@ impl App {
             KeyAction::ToggleToolCalls => {
                 self.viewport.toggle_tool_calls();
             }
+            KeyAction::ToggleDiff => {
+                self.viewport.toggle_diff();
+            }
             KeyAction::FocusDown => {
                 // Ctrl+j: scroll viewport down
                 self.viewport.scroll_down(3);
@@ -754,7 +757,8 @@ Hotkeys:\n\
   Ctrl+e         Open $EDITOR for prompt\n\
   Ctrl+/         Toggle query agent\n\
   Ctrl+o         Expand/collapse thinking chains\n\
-  Ctrl+x         Expand/collapse tool-call panels\n\
+  Ctrl+x         Expand/collapse shell-run panels\n\
+  Ctrl+p         Expand/collapse diff panels (>20 lines)\n\
   Ctrl+j/k       Scroll viewport down/up\n\
   Ctrl+h/l       Move cursor word left/right\n\
   Ctrl+w         Delete word left\n\
@@ -763,7 +767,8 @@ Hotkeys:\n\
   Ctrl+Enter     New line in prompt\n\
   Home/End       Start/end of current line\n\
   Ctrl+b         Stop LLM generation\n\
-  Ctrl+c         Clear prompt"
+  Ctrl+c         Clear prompt\n\
+  Ctrl+y         Toggle mouse capture for text selection & copy"
                                                 .into(),
                                         );
                                     }

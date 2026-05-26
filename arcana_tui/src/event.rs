@@ -157,6 +157,8 @@ pub enum KeyAction {
     Expand,
     /// Ctrl+X (expand/collapse tool-call panels)
     ToggleToolCalls,
+    /// Ctrl+P (expand/collapse diff panels beyond 20 lines)
+    ToggleDiff,
     /// Ctrl+G (open editor)
     OpenEditor,
     /// Ctrl+T (toggle tasks panel)
@@ -195,6 +197,7 @@ pub fn classify_key(key: &KeyEvent) -> KeyAction {
         KeyCode::Char('k') if ctrl => KeyAction::FocusUp,
         KeyCode::Char('o') if ctrl => KeyAction::Expand,
         KeyCode::Char('x') if ctrl => KeyAction::ToggleToolCalls,
+        KeyCode::Char('p') if ctrl => KeyAction::ToggleDiff,
         KeyCode::Char('y') if ctrl => KeyAction::ToggleSelectionMode,
         KeyCode::Char('w') if ctrl => KeyAction::DeleteWordLeft,
         KeyCode::Char('h') if ctrl => KeyAction::WordLeft,

@@ -479,7 +479,8 @@ the agent uses tools without touching the API reference.
 | `Ctrl+Shift+M` | Modify last prompt |
 | `Ctrl+/` | Toggle query overlay |
 | `Ctrl+Y` | Toggle mouse capture for native text selection & copy (mouse selects, Ctrl+Shift+C copies) |
-| `Ctrl+X` | Toggle `[Arcana Run]` shell panel + diff truncation expand/collapse |
+| `Ctrl+X` | Toggle shell-run panel expand/collapse |
+| `Ctrl+P` | Toggle diff panel expand/collapse (>20 lines) |
 
 > **Text selection:** `Ctrl+Y` releases the mouse back to the terminal so you can
 > select any visible text with the mouse and copy with `Ctrl+Shift+C` (or `Cmd+C`

@@ -373,7 +373,8 @@ arcana resume --last            # Resume previous session
 | `Ctrl+e` | Open `$EDITOR` for prompt editing |
 | `Ctrl+b` | Stop LLM generation immediately |
 | `Ctrl+o` | Toggle thinking chain expand/collapse |
-| `Ctrl+x` | Toggle `[Arcana Run]` shell panel + diff truncation expand/collapse |
+| `Ctrl+x` | Toggle shell-run panel expand/collapse |
+| `Ctrl+p` | Toggle diff panel expand/collapse (>20 lines) |
 | `Ctrl+y` | Toggle mouse capture — release mouse for native text selection & copy |
 | `Ctrl+j` / `Ctrl+k` | Scroll viewport down/up |
 | `Ctrl+Enter` | Newline in composer (also `Shift+Enter`) |
