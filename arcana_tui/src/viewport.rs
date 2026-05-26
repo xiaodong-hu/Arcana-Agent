@@ -376,6 +376,13 @@ impl Viewport {
                     let bg = Style::default().bg(theme.composer_bg);
                     let text_style = theme.composer_text;
                     let fill_w = inner.width as usize;
+
+                    // Leading full-width background line (visual padding above)
+                    lines.push((
+                        msg_idx,
+                        Line::from(vec![Span::styled(" ".repeat(fill_w), bg)]),
+                    ));
+
                     let content_lines: Vec<&str> = msg.content.split('\n').collect();
                     for (i, line_text) in content_lines.iter().enumerate() {
                         let prefix = if i == 0 { "❯ " } else { "  " };
@@ -563,7 +570,11 @@ impl Viewport {
                                     }
                                     // Render styled diff
                                     let file_path = &tc.description;
-                                    for styled_line in render_styled_diff(diff, file_path, inner.width.saturating_sub(2)) {
+                                    for styled_line in render_styled_diff(
+                                        diff,
+                                        file_path,
+                                        inner.width.saturating_sub(2),
+                                    ) {
                                         let mut spans = vec![Span::raw("  ")];
                                         spans.extend(styled_line.spans);
                                         lines.push((msg_idx, Line::from(spans)));
@@ -657,7 +668,11 @@ impl Viewport {
                                     if !pre.is_empty() && !diff.is_empty() {
                                         lines.push((msg_idx, Line::from("")));
                                     }
-                                    for styled_line in render_styled_diff(diff, &tc.description, inner.width.saturating_sub(2)) {
+                                    for styled_line in render_styled_diff(
+                                        diff,
+                                        &tc.description,
+                                        inner.width.saturating_sub(2),
+                                    ) {
                                         let mut spans = vec![Span::raw("  ")];
                                         spans.extend(styled_line.spans);
                                         lines.push((msg_idx, Line::from(spans)));
@@ -1148,16 +1163,21 @@ pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str, panel_width: u16
     // Pad each line to fill panel_width with the appropriate background
     let fill_w = panel_width as usize;
     for line in &mut lines {
-        let used_w: usize = line.spans.iter()
+        let used_w: usize = line
+            .spans
+            .iter()
             .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
             .sum();
         let pad = fill_w.saturating_sub(used_w);
         if pad > 0 {
-            let last_bg = line.spans.last()
+            let last_bg = line
+                .spans
+                .last()
                 .map(|s| s.style.bg)
                 .flatten()
                 .unwrap_or(Color::Reset);
-            line.spans.push(Span::styled(" ".repeat(pad), Style::default().bg(last_bg)));
+            line.spans
+                .push(Span::styled(" ".repeat(pad), Style::default().bg(last_bg)));
         }
     }
 

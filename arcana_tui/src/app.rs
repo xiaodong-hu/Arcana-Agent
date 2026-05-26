@@ -375,10 +375,10 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Min(5),                     // viewport fills
-                Constraint::Length(task_panel_h),        // task panel
-                Constraint::Length(composer_h + 1),      // composer + gap
-                Constraint::Length(status_h),            // status bar at bottom
+                Constraint::Min(5),                 // viewport fills
+                Constraint::Length(task_panel_h),   // task panel
+                Constraint::Length(composer_h + 1), // composer + gap
+                Constraint::Length(status_h),       // status bar at bottom
             ])
             .split(area);
 
@@ -1316,7 +1316,11 @@ Hotkeys:\n\
                                         event_handle.abort();
                                         let (tx, mut rx, handle) = event::spawn_event_reader();
                                         let approval = tui_approve_authority_request(
-                                            &mut app, &mut tui, &tx, &mut rx, request.clone(),
+                                            &mut app,
+                                            &mut tui,
+                                            &tx,
+                                            &mut rx,
+                                            request.clone(),
                                         )?;
                                         handle.abort();
                                         // Respawn the main event reader
@@ -2158,7 +2162,11 @@ fn tui_approve_authority_request(
         let details = authority_request_details(&request);
 
         // Add tool call with confirmation prompt
-        let confirm_idx = app.viewport.messages.iter().rev()
+        let confirm_idx = app
+            .viewport
+            .messages
+            .iter()
+            .rev()
             .find(|m| m.role == MessageRole::Agent)
             .map(|m| m.tool_calls.len())
             .unwrap_or(0);
@@ -2175,9 +2183,10 @@ fn tui_approve_authority_request(
         // Render with confirmation visible
         tui.draw(|frame| app.render(frame))?;
 
-        // Wait for a key (blocking — we're inside a synchronous function)
+        // Wait for a key (use block_in_place to not block the tokio runtime)
         let answer = loop {
-            match rx.blocking_recv() {
+            let evt = tokio::task::block_in_place(|| rx.blocking_recv());
+            match evt {
                 Some(AppEvent::Key(key)) => {
                     let action = classify_key(&key);
                     match action {
@@ -2195,7 +2204,11 @@ fn tui_approve_authority_request(
         };
 
         // Update the tool call with result
-        if let Some(msg) = app.viewport.messages.iter_mut().rev()
+        if let Some(msg) = app
+            .viewport
+            .messages
+            .iter_mut()
+            .rev()
             .find(|m| m.role == MessageRole::Agent)
         {
             if let Some(tc) = msg.tool_calls.last_mut() {
@@ -2210,7 +2223,11 @@ fn tui_approve_authority_request(
                         }));
                     }
                     "e" => {
-                        match edit_authority_target(&details.target) {
+                        // Suspend TUI for external editor
+                        tui.suspend()?;
+                        let edit_result = edit_authority_target(&details.target);
+                        tui.resume()?;
+                        match edit_result {
                             Ok(edited) if !edited.trim().is_empty() => {
                                 request = edit_authority_request_target(request, edited.trim());
                                 // Remove the temporary tool call and loop again
@@ -2220,7 +2237,9 @@ fn tui_approve_authority_request(
                             Ok(_) => {
                                 tc.result = Some("Aborted (empty edit).".to_string());
                                 return Ok(aborted_authority_approval(
-                                    details.tool_type, details.target, details.action,
+                                    details.tool_type,
+                                    details.target,
+                                    details.action,
                                     details.abort_error_type,
                                     format!("{} edit produced an empty request", details.kind),
                                 ));
@@ -2228,7 +2247,9 @@ fn tui_approve_authority_request(
                             Err(e) => {
                                 tc.result = Some(format!("Aborted (edit failed: {e})."));
                                 return Ok(aborted_authority_approval(
-                                    details.tool_type, details.target, details.action,
+                                    details.tool_type,
+                                    details.target,
+                                    details.action,
                                     details.abort_error_type,
                                     format!("{} edit failed: {e}", details.kind),
                                 ));
@@ -2238,7 +2259,9 @@ fn tui_approve_authority_request(
                     _ => {
                         tc.result = Some("Aborted.".to_string());
                         return Ok(aborted_authority_approval(
-                            details.tool_type, details.target.clone(), details.action,
+                            details.tool_type,
+                            details.target.clone(),
+                            details.action,
                             details.abort_error_type,
                             format!("{} aborted by user: {}", details.kind, details.target),
                         ));
@@ -2248,8 +2271,11 @@ fn tui_approve_authority_request(
         }
         // Fallback
         return Ok(aborted_authority_approval(
-            details.tool_type, details.target, details.action,
-            details.abort_error_type, "confirmation lost".into(),
+            details.tool_type,
+            details.target,
+            details.action,
+            details.abort_error_type,
+            "confirmation lost".into(),
         ));
     }
 }
