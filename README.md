@@ -45,11 +45,13 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │                        arcana (TUI)                               │  │
 │  │  ┌─────────────────────────────────────────────────────────────┐  │  │
-│  │  │ Status: deepseek-v4-pro │ [████░░░░░░] 2k/1M │ Tasks: 2/7 | Sub-Agents: 3 │ Skills (System/User): 9/2 │  │  │
-│  │  ├─────────────────────────────────────────────────────────────┤  │  │
 │  │  │ Viewport (streaming responses, thinking blocks, diffs)      │  │  │
 │  │  ├─────────────────────────────────────────────────────────────┤  │  │
-│  │  │ Composer (multiline input)                                  │  │  │
+│  │  │ Task Panel                                                  │  │  │
+│  │  ├─────────────────────────────────────────────────────────────┤  │  │
+│  │  │ Composer (multiline input, smoky-black background)          │  │  │
+│  │  ├─────────────────────────────────────────────────────────────┤  │  │
+│  │  │ Status: deepseek-v4-pro │ Agent │ [████░░] 2k/1M │ Tasks    │  │  │
 │  │  └─────────────────────────────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 │                              │                                           │
@@ -61,8 +63,9 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 │  │           │  │                       │  │  ┌─────┐ ┌─────┐       │ │
 │  │ triggers  │  │  • Permission gate    │  │  │Agent│ │Agent│ ...   │ │
 │  │ manifests │  │  • Git-like recording │  │  │  1  │ │  2  │       │ │
-│  │ hot-load  │  │  • Crash recovery     │  │  └─────┘ └─────┘       │ │
-│  └───────────┘  └───────────────────────┘  └─────────────────────────┘ │
+│  │ hot-load  │  │  • reqwest web fetch  │  │  └─────┘ └─────┘       │ │
+│  └───────────┘  │  • Crash recovery     │  └─────────────────────────┘ │
+│                 └───────────────────────┘                               │
 │                              │                                           │
 │                    ┌─────────┴─────────┐                                │
 │                    │   Memory System   │                                 │
@@ -493,45 +496,31 @@ Arcana-Agent/
 
 ---
 
-## ⚠️ Current Status — Unimplemented Features
+## ⚠️ Current Status
 
-> **Warning:** Arcana is in early development. The following features are designed but not yet implemented.
+Arcana is in active development. Core agent loop, authority & recording, and TUI are functional.
 
 ### Working Now
-- [x] `arcana onboard` — interactive & non-interactive setup wizard
-- [x] `arcana -q "..."` — single-shot LLM query (DeepSeek API, with thinking mode)
-- [x] `arcana version` / `arcana check` / `arcana config show|path|edit`
-- [x] `arcana --reset [<project>]` — reset project workspace (with confirmation)
-- [x] `arcana --reset --factory` — reset global config (with extra warning)
-- [x] Interactive TUI shell (viewport, composer, status bar, keybindings)
-- [x] Collapsible task panel (Ctrl+T) with tree-style indicators
-- [x] Interactive LLM streaming — TUI session sends messages to DeepSeek with SSE streaming
-- [x] Thinking chain panel — collapsed by default, Ctrl+O to expand/collapse (works during streaming)
-- [x] `arcana auth status|allow|deny|revoke|reset` — command authorization management
-- [x] `~/.arcana/authority.toml` — hot-reloadable authority config (created on onboard)
-- [x] Query agent overlay — `Ctrl+/` toggles persistent query sub-agent with full streaming support
-- [x] Kitty keyboard protocol — reliable Ctrl+/, Ctrl+Enter, Shift+Enter detection
-- [x] Auto-scroll with cursor-tracking threshold algorithm (adapts to window resize)
-- [x] Editor integration — `Ctrl+E` opens `$EDITOR`, content flushed back to composer
-- [x] Multiline composer — `Ctrl+Enter`/`Shift+Enter` for newlines, faithful formatting
-- [x] History recall — `Up`/`Down` from empty prompt, breaks on any edit action
-- [x] Markdown rendering — syntax highlighting, inline code, compact newlines
-- [x] Welcome banner — gradient-colored ASCII art, scrollable in viewport history
+- [x] Interactive TUI with streaming LLM responses, thinking panels, markdown rendering
+- [x] Ask / Agent mode dispatch with editable system prompts (`INSTRUCTION.md`, `BEHAVIORAL.md`)
+- [x] Authority & recording — permission gate, git-like mutation recording, diff reporting
+- [x] `arcana recovery --list` / `--to-sequence N` — inspect and restore recorded project state
+- [x] Inline TUI confirmation for authority requests (no shell prompt)
+- [x] Safe-command auto-approval (echo, ls, cat, grep, git diff, …)
+- [x] Web fetch via reqwest (rustls TLS) — managed by authority system
+- [x] `\mode`, `\behavioral`, `\instruction`, `\authorization`, `\config` in-session commands
+- [x] Query agent overlay (`Ctrl+/`), editor integration (`Ctrl+E`), text selection (`Ctrl+Y`)
+- [x] Syntax-highlighted diffs with line numbers, collapsible at 20 lines (`Ctrl+P`)
+- [x] Shell tool-call panels with inline bash highlighting (`Ctrl+X`)
 
-### Not Yet Implemented
-- [ ] **Session management** — `arcana session list|resume|rename|delete|export|import`
-- [ ] **Session resume** — `arcana resume --last` / `arcana resume <id>`
-- [ ] **Sub-agent orchestration** — spawning, checkpointing, freezing, resuming sub-agents
-- [ ] **Skills daemon** — trigger-based skill loading, hot-reload, manifest parsing
-- [ ] **Memory system** — knowledge DB, semantic search, error patterns, session recall
-- [ ] **Embedding model download** — `arcana onboard` does not yet download `all-MiniLM-L6-v2.onnx`
-- [x] **Authority & recording** — permission gate, git-like mutation recording, command-delta recording, and diff reporting
-- [x] **`arcana recovery`** — inspect and restore project state from `git_record`
-- [ ] **Tool calls** — shell execution, file read/write, search, web fetch (IPC protocol implemented)
-- [ ] **Diff review panel** — interactive accept/reject of file mutations
-- [ ] **OpenAI / Anthropic provider support** — only DeepSeek is wired up
-- [ ] **Context caching** — leveraging DeepSeek's prefix caching for long contexts
-- [ ] **Desktop notifications** — bell/notification on response complete
+### Roadmap (next milestones)
+- [ ] Session management — save, resume, rename, export sessions
+- [ ] Sub-agent orchestration — spawning, checkpointing, parallel work
+- [ ] Memory system — knowledge DB, semantic search, cross-session recall
+- [ ] Skills daemon — hot-loadable triggers and manifests
+- [ ] OpenAI / Anthropic provider support
+- [ ] Diff review panel — interactive accept / edit / reject
+- [ ] Desktop notifications on response complete
 
 ---
 
