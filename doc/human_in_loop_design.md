@@ -89,7 +89,8 @@ When "Edit in $EDITOR" is selected:
 The approval and diff review panels integrate with the merged AAS policy from
 `~/.arcana/authority.toml` and project `.arcana/authority.toml`:
 
-- Commands in `[commands.allow]` execute without approval
+- Commands in `[commands.allow]` are permitted by AAS; Arcana-Agent may still ask for human confirmation unless they are also in `[commands.safe]`
+- Commands in `[commands.safe]` execute through AAS without a human confirmation panel
 - Commands in `[commands.confirm]` always show the approval panel
 - Unlisted command, filesystem, and network registration requests can be allowed,
   edited, or aborted; approved registrations are written to project

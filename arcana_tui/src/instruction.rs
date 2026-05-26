@@ -1,9 +1,14 @@
 use std::path::PathBuf;
 
 const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority System (AAS)
-AAS can be called to communicate with Arcana-Agent for command execution, filesystem access, web access, and authority registration. 
+AAS is the only interface for command execution, filesystem access, web access, and authority registration.
 
-To call AAS, output ONE SINGLE JSON object per line using the AAS API below, with NO markdown wrapper. Arcana-Agent will take action from those JSON lines passed via AAS, return JSON responses to you, and then you MUST continue from the returned results. 
+## Bridge Protocol
+When an operation requires AAS, put the AAS request in the visible assistant message, not in hidden reasoning/thinking. Output exactly one JSON object per line, with no markdown wrapper, prose, or code fence, then stop the message.
+
+Arcana-Agent will relay those JSON lines to AAS, run approved requests, and send returned JSON back to you as the next user message. Continue only from returned AAS JSON. Never invent stdout, stderr, status, files, web content, or tool results before AAS returns them.
+
+If AAS returns `{"status":"aborted",...}` or `{"status":"denied",...}`, report that result and stop that operation. Do not retry, bypass, or simulate AAS.
 
 ## Common Operations
 ```json
@@ -25,7 +30,8 @@ Use `read_text` and `write_text` for normal text files. Use byte-level `read`/`w
 {"op":"register_web","domain":"example.com"}
 {"op":"register_filesystem","access":"writable","path":"generated/**"}
 ```
-For temporary scripts, use `.arcana/tmp/`. If AAS returns `{"status":"aborted",...}` or `{"status":"denied",...}`, report it and stop that operation. Do not retry or route around AAS.
+
+Use `exec_shell` for ordinary shell commands. Use `.arcana/tmp/` for temporary scripts. Even safe/no-confirmation operations still go through AAS using this protocol.
 "#;
 
 pub fn path() -> Result<PathBuf, Box<dyn std::error::Error>> {

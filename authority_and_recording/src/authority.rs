@@ -36,6 +36,7 @@ impl Authority {
         let project_config_path = project_authority_path(&project_root);
 
         let mut merged = NormalizedAuthorityConfig::default();
+        merged.merge(GlobalAuthorityConfig::default_project());
         let mut source_configs = AuthorityConfigSources {
             system_toml: None,
             project_toml: None,
@@ -53,10 +54,6 @@ impl Authority {
             source_configs.project_toml = Some(text.clone());
             let config = GlobalAuthorityConfig::from_toml(&text)?;
             merged.merge(config);
-        }
-
-        if merged.is_empty() {
-            merged.merge(GlobalAuthorityConfig::default_project());
         }
 
         let (rules, web, tools) = merged.into_access_config();
@@ -118,17 +115,22 @@ impl Authority {
             format!("{} {}", cmd, args.join(" "))
         };
         for d in &self.tools.deny {
-            if command_rule_matches(d, cmd, &full) {
+            if command_rule_matches(d, cmd, args, &full) {
                 return RuleVerdict::Deny;
             }
         }
+        for s in &self.tools.safe {
+            if safe_command_rule_matches(s, cmd, args, &full) {
+                return RuleVerdict::Allow;
+            }
+        }
         for a in &self.tools.allow {
-            if command_rule_matches(a, cmd, &full) {
+            if command_rule_matches(a, cmd, args, &full) {
                 return RuleVerdict::Allow;
             }
         }
         for p in &self.tools.prompt {
-            if command_rule_matches(p, cmd, &full) {
+            if command_rule_matches(p, cmd, args, &full) {
                 return RuleVerdict::Prompt;
             }
         }
@@ -330,7 +332,12 @@ impl GlobalAuthorityConfig {
 
     fn default_project() -> Self {
         Self {
-            commands: GlobalCommandsConfig::default(),
+            commands: GlobalCommandsConfig {
+                safe: default_safe_commands(),
+                allow: vec![],
+                confirm: vec![],
+                deny: vec![],
+            },
             network: GlobalNetworkConfig::default(),
             filesystem: GlobalFilesystemConfig {
                 writable: vec![],
@@ -343,6 +350,8 @@ impl GlobalAuthorityConfig {
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct GlobalCommandsConfig {
+    #[serde(default)]
+    safe: Vec<String>,
     #[serde(default)]
     allow: Vec<String>,
     #[serde(default)]
@@ -371,6 +380,7 @@ struct GlobalFilesystemConfig {
 
 #[derive(Default)]
 struct NormalizedAuthorityConfig {
+    commands_safe: Vec<String>,
     commands_allow: Vec<String>,
     commands_confirm: Vec<String>,
     commands_deny: Vec<String>,
@@ -383,6 +393,7 @@ struct NormalizedAuthorityConfig {
 
 impl NormalizedAuthorityConfig {
     fn merge(&mut self, config: GlobalAuthorityConfig) {
+        extend_unique(&mut self.commands_safe, config.commands.safe);
         extend_unique(&mut self.commands_allow, config.commands.allow);
         extend_unique(&mut self.commands_confirm, config.commands.confirm);
         extend_unique(&mut self.commands_deny, config.commands.deny);
@@ -391,17 +402,6 @@ impl NormalizedAuthorityConfig {
         extend_unique(&mut self.filesystem_writable, config.filesystem.writable);
         extend_unique(&mut self.filesystem_readonly, config.filesystem.readonly);
         extend_unique(&mut self.filesystem_deny, config.filesystem.deny);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.commands_allow.is_empty()
-            && self.commands_confirm.is_empty()
-            && self.commands_deny.is_empty()
-            && self.network_allow.is_empty()
-            && self.network_deny.is_empty()
-            && self.filesystem_writable.is_empty()
-            && self.filesystem_readonly.is_empty()
-            && self.filesystem_deny.is_empty()
     }
 
     fn into_access_config(self) -> (AccessRules, WebConfig, ToolsConfig) {
@@ -432,6 +432,7 @@ impl NormalizedAuthorityConfig {
         };
 
         let tools = ToolsConfig {
+            safe: self.commands_safe,
             allow: self.commands_allow,
             prompt: self.commands_confirm,
             deny: self.commands_deny,
@@ -480,7 +481,7 @@ fn project_authority_path(project_root: &Path) -> PathBuf {
 }
 
 fn default_project_authority_toml() -> String {
-    "[commands]\nallow = []\nconfirm = []\ndeny = []\n\n[network]\nallow = []\ndeny = []\n\n[filesystem]\nwritable = []\nreadonly = []\ndeny = []\n".into()
+    "[commands]\nsafe = []\nallow = []\nconfirm = []\ndeny = []\n\n[network]\nallow = []\ndeny = []\n\n[filesystem]\nwritable = []\nreadonly = []\ndeny = []\n".into()
 }
 
 fn append_to_array(config: &mut String, section: &str, key: &str, entry: &str) {
@@ -531,8 +532,84 @@ fn extend_unique(dst: &mut Vec<String>, src: Vec<String>) {
     }
 }
 
-fn command_rule_matches(rule: &str, cmd: &str, full: &str) -> bool {
-    rule == cmd || rule == full || glob_match(rule, full)
+fn default_safe_commands() -> Vec<String> {
+    [
+        "pwd",
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "sort",
+        "uniq",
+        "cut",
+        "tr",
+        "grep",
+        "rg",
+        "find",
+        "file",
+        "stat",
+        "du",
+        "df",
+        "which",
+        "type",
+        "whereis",
+        "whoami",
+        "hostname",
+        "uname",
+        "date",
+        "git status",
+        "git diff",
+        "git log",
+        "git show",
+        "git branch",
+        "git tag",
+        "git remote",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect()
+}
+
+fn command_rule_matches(rule: &str, cmd: &str, args: &[String], full: &str) -> bool {
+    if rule == cmd || rule == full || glob_match(rule, full) {
+        return true;
+    }
+
+    if cmd == "sh" && args.first().map(|arg| arg.as_str()) == Some("-c") {
+        if let Some(shell_command) = args.get(1).map(|arg| arg.trim()) {
+            if shell_command_is_simple(shell_command) {
+                let shell_words = shell_command.split_whitespace().collect::<Vec<_>>();
+                if let Some(shell_cmd) = shell_words.first() {
+                    if rule == *shell_cmd
+                        || rule == shell_command
+                        || glob_match(rule, shell_command)
+                    {
+                        return true;
+                    }
+                    if let Some(rest) = rule.strip_prefix(&format!("{shell_cmd} ")) {
+                        let actual_rest = shell_words[1..].join(" ");
+                        return rest == actual_rest || glob_match(rest, &actual_rest);
+                    }
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn safe_command_rule_matches(rule: &str, cmd: &str, args: &[String], full: &str) -> bool {
+    if full == ".arcana" || full.contains(".arcana/") || full.contains("/.arcana/") {
+        return false;
+    }
+    command_rule_matches(rule, cmd, args, full)
+}
+
+fn shell_command_is_simple(command: &str) -> bool {
+    !command
+        .chars()
+        .any(|ch| matches!(ch, ';' | '|' | '&' | '>' | '<' | '`' | '$' | '\n' | '\r'))
 }
 
 fn domain_rule_matches(rule: &str, domain: &str) -> bool {

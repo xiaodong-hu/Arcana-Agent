@@ -89,7 +89,8 @@ Authority policy uses the same TOML schema at both levels. The system-wide file 
 
 ```toml
 [commands]
-allow = ["ls", "cat", "rg", "cargo test"]
+safe = ["ls", "cat", "rg", "git status", "git diff"]
+allow = ["cargo test"]
 confirm = ["git commit", "git push", "rm"]
 deny = ["sudo *"]
 
@@ -154,7 +155,8 @@ The agent cannot execute arbitrary system commands. All execution goes through t
 
 Defined in the `[commands]` section of `~/.arcana/authority.toml` and project
 `.arcana/authority.toml`. These are available immediately when the agent starts:
-- `allow` — commands the agent can run without prompting.
+- `safe` — read-only commands the agent can run through AAS without human confirmation.
+- `allow` — commands permitted by AAS; Arcana-Agent may still show human confirmation unless also listed in `safe`.
 - `confirm` — commands that require human approval and optional editing.
 - `deny` — commands that are always blocked.
 - Unlisted commands → runtime default behavior.
@@ -180,7 +182,7 @@ The agent (or its skill/MCP plugins) can request to register new tools at runtim
 Agent: {"op": "exec", "cmd": "ls", "args": ["-la", "src/"]}
 Authority:
   1. Check deny list → not denied
-  2. Check allow list → "ls" is allowed
+  2. Check safe/allow list → "ls" is allowed
   3. Execute: spawn "ls -la src/" as real user
   4. Capture stdout/stderr
   5. Return: {"status": "ok", "stdout": "...", "stderr": "", "code": 0}

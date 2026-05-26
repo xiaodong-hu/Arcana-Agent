@@ -194,6 +194,8 @@ impl Default for WebConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolsConfig {
     #[serde(default)]
+    pub safe: Vec<String>,
+    #[serde(default)]
     pub allow: Vec<String>,
     #[serde(default)]
     pub prompt: Vec<String>,
@@ -208,6 +210,7 @@ pub struct ToolsConfig {
 impl Default for ToolsConfig {
     fn default() -> Self {
         Self {
+            safe: vec![],
             allow: vec![],
             prompt: vec![],
             deny: vec![],

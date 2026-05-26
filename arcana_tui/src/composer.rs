@@ -432,7 +432,7 @@ impl Composer {
         } else {
             0
         };
-        visual_lines.min(max_lines) + 1 + cmd_list_lines // +1 for top border
+        visual_lines.min(max_lines) + 2 + cmd_list_lines // +2 for enclosing blank lines
     }
 
     /// Fallback height (no width info).
@@ -452,7 +452,9 @@ impl Composer {
 
     /// Render the composer.
     pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
-        let block = Block::default().borders(Borders::TOP).bg(theme.composer_bg);
+        // No border — background alone distinguishes the input area,
+        // matching the user-message panel appearance in the viewport.
+        let block = Block::default().bg(theme.composer_bg);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -466,12 +468,18 @@ impl Composer {
             } else {
                 "[type \\ for commands, or enter message]"
             };
-            let line = Line::from(vec![
+            // Enclosing blank lines for visual separation
+            let blank = Line::from(vec![Span::styled(
+                " ".repeat(area.width as usize),
+                Style::default().bg(theme.composer_bg),
+            )]);
+            let hint_line = Line::from(vec![
                 Span::styled(prompt, theme.prompt_glyph),
                 Span::styled(hint_text, theme.dim),
             ]);
-            frame.render_widget(Paragraph::new(line), inner);
-            frame.set_cursor_position(Position::new(inner.x + prompt_width, inner.y));
+            let paragraph = Paragraph::new(vec![blank.clone(), hint_line, blank]);
+            frame.render_widget(paragraph, inner);
+            frame.set_cursor_position(Position::new(inner.x + prompt_width, inner.y + 1));
             return;
         }
 
@@ -634,8 +642,18 @@ impl Composer {
             }
         }
 
+        // Add enclosing blank lines (full-width background) above and below content
+        let blank_line = Line::from(vec![Span::styled(
+            " ".repeat(area.width as usize),
+            Style::default().bg(theme.composer_bg),
+        )]);
+        visual_lines.insert(0, blank_line.clone());
+        visual_lines.push(blank_line);
+
         // Scroll visual_lines to keep cursor visible within inner.height
         let max_visible = inner.height as usize;
+        // Account for the leading blank line: shift cursor down by 1
+        let cursor_visual_y = cursor_visual_y + 1;
         let scroll_offset = if visual_lines.len() <= max_visible {
             0
         } else {

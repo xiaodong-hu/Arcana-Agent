@@ -65,7 +65,8 @@ The thinking chain is critical for DeepSeek's context caching:
 
 ```toml
 [commands]
-allow = ["cargo build", "cargo test", "git status", "ls", "cat", ...]
+safe = ["git status", "git diff", "ls", "cat", "rg", ...]
+allow = ["cargo build", "cargo test", ...]
 confirm = ["git push", "git commit", "rm -rf", "sudo *"]
 
 [network]

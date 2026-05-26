@@ -7,11 +7,21 @@ use crate::authority::Authority;
 
 const DEFAULT_INSTRUCTION: &str = r#"# Arcana Authority System (AAS)
 
-Use AAS for command execution, filesystem access, web access, and authority
-registration. To call AAS, output one JSON object per line with an `op` field
-and no markdown wrapper. Arcana-Agent will ask the human when approval is
-needed, run approved requests, return JSON responses, and then you continue
-from those results.
+AAS is the only interface for command execution, filesystem access, web access,
+and authority registration.
+
+## Bridge Protocol
+When an operation requires AAS, put the AAS request in the visible assistant
+message, not in hidden reasoning/thinking. Output exactly one JSON object per
+line, with no markdown wrapper, prose, or code fence, then stop the message.
+
+Arcana-Agent will relay those JSON lines to AAS, run approved requests, and send
+returned JSON back to you as the next user message. Continue only from returned
+AAS JSON. Never invent stdout, stderr, status, files, web content, or tool
+results before AAS returns them.
+
+If AAS returns `{"status":"aborted",...}` or `{"status":"denied",...}`, report
+that result and stop that operation. Do not retry, bypass, or simulate AAS.
 
 ## Common Operations
 ```json
@@ -36,10 +46,9 @@ Use `read_text` and `write_text` for normal text files. Use byte-level
 {"op":"register_filesystem","access":"writable","path":"generated/**"}
 ```
 
-Always try to use available AAS tools and authorities when they materially
-improve the answer. For temporary scripts, use `.arcana/tmp/`. If AAS returns
-`{"status":"aborted",...}` or `{"status":"denied",...}`, report it and stop
-that operation. Do not retry or route around AAS.
+Use `exec_shell` for ordinary shell commands. Use `.arcana/tmp/` for temporary
+scripts. Even safe/no-confirmation operations still go through AAS using this
+protocol.
 "#;
 
 pub fn load_or_create_instruction() -> io::Result<String> {
@@ -69,7 +78,9 @@ pub fn generate_prompt(authority: &Authority) -> io::Result<String> {
     let mut out = String::new();
     out.push_str(instruction.trim_end());
     out.push_str("\n\n## Session Authority Channel\n\n");
-    out.push_str("Emit AAS JSONL requests in your response; Arcana-Agent relays them to AAS.\n");
+    out.push_str("AAS requests must appear in visible assistant content, never only in reasoning/thinking.\n");
+    out.push_str("When you need AAS, output only JSONL request objects and stop; wait for Arcana-Agent to return AAS JSON before answering.\n");
+    out.push_str("Do not fabricate command output, file content, web content, or AAS status.\n");
     out.push_str("Use `{\"op\":\"instruction\"}` to reload this interface and `{\"op\":\"list_authority\"}` to reload current policy.\n");
 
     out.push_str("\n## System-Wide Authority Policy\n\n```toml\n");

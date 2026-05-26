@@ -8,7 +8,8 @@ const TOOL_HINT: Color = Color::Rgb(160, 160, 170);
 const TOOL_OUTPUT: Color = Color::Rgb(185, 185, 195);
 const PIGMENT_GREEN: Color = Color::Rgb(0, 165, 80);
 const AMBER_SAE_ECE: Color = Color::Rgb(255, 126, 0);
-const AWESOME_RED: Color = Color::Rgb(255, 33, 82);
+const DIFF_ADDED_BG: Color = Color::Rgb(0, 55, 30); // dark green bg for added lines
+const DIFF_REMOVED_BG: Color = Color::Rgb(70, 10, 10); // dark red bg for removed lines
 
 /// Viewport state: manages scroll position and message rendering.
 #[derive(Debug)]
@@ -29,8 +30,12 @@ pub struct Viewport {
     pub think_collapsed: bool,
     /// Whether tool-call panels are collapsed
     pub tool_calls_collapsed: bool,
+    /// Whether inline diffs are truncated to ~20 lines (toggled with Ctrl+X)
+    pub diff_collapsed: bool,
     /// Last rendered visual line count, used to keep manual-scroll views stable as content grows.
     last_total_lines: usize,
+    /// Cached fully wrapped visual lines. Scroll-only renders reuse this cache.
+    render_cache: RenderCache,
 }
 
 #[derive(Debug)]
@@ -38,6 +43,13 @@ pub struct StreamingThink {
     pub content: String,
     pub token_count: usize,
     pub start_time: std::time::Instant,
+}
+
+#[derive(Debug, Default)]
+struct RenderCache {
+    valid: bool,
+    width: u16,
+    lines: Vec<(usize, Line<'static>)>,
 }
 
 impl Default for Viewport {
@@ -51,7 +63,9 @@ impl Default for Viewport {
             is_streaming: false,
             think_collapsed: true,
             tool_calls_collapsed: false,
+            diff_collapsed: true,
             last_total_lines: 0,
+            render_cache: RenderCache::default(),
         }
     }
 }
@@ -61,9 +75,14 @@ impl Viewport {
         Self::default()
     }
 
+    fn invalidate_render_cache(&mut self) {
+        self.render_cache.valid = false;
+    }
+
     /// Append a token to the current streaming response.
     pub fn append_token(&mut self, token: &str) {
         self.streaming_text.push_str(token);
+        self.invalidate_render_cache();
         if self.auto_scroll {
             self.scroll_offset = 0;
         }
@@ -110,6 +129,7 @@ impl Viewport {
             tool_calls: Vec::new(),
             separator: None,
         });
+        self.invalidate_render_cache();
     }
 
     /// Start a thinking block.
@@ -119,6 +139,7 @@ impl Viewport {
             token_count: 0,
             start_time: std::time::Instant::now(),
         });
+        self.invalidate_render_cache();
     }
 
     /// Append a token to the current thinking block.
@@ -127,6 +148,7 @@ impl Viewport {
             think.content.push_str(token);
             think.token_count += 1;
         }
+        self.invalidate_render_cache();
     }
 
     /// End the current thinking block (collapse it).
@@ -187,6 +209,7 @@ impl Viewport {
             });
         }
         self.is_streaming = false;
+        self.invalidate_render_cache();
         // Don't force auto_scroll — user may be reading above
         // auto_scroll re-engages when user scrolls back to bottom
     }
@@ -200,12 +223,13 @@ impl Viewport {
             }
         }
         self.scroll_offset = 0;
+        self.invalidate_render_cache();
     }
 
-    /// Toggle all Shell tool-call panels expand/collapse (Ctrl+X).
-    /// Non-Shell (authority request) panels are always compact and unaffected.
+    /// Toggle all Shell tool-call panels expand/collapse + diff truncation (Ctrl+X).
     pub fn toggle_tool_calls(&mut self) {
         self.tool_calls_collapsed = !self.tool_calls_collapsed;
+        self.diff_collapsed = !self.diff_collapsed;
         for msg in &mut self.messages {
             for tc in &mut msg.tool_calls {
                 if tc.tool_type == ToolType::Shell {
@@ -214,6 +238,7 @@ impl Viewport {
             }
         }
         self.scroll_offset = 0;
+        self.invalidate_render_cache();
     }
 
     /// Attach a tool-call panel to the most recent agent response.
@@ -230,6 +255,7 @@ impl Viewport {
         {
             msg.tool_calls.push(tool_call);
         }
+        self.invalidate_render_cache();
         if self.auto_scroll {
             self.scroll_offset = 0;
         }
@@ -248,6 +274,7 @@ impl Viewport {
             tc.result = Some(result);
             tc.duration_ms = duration_ms;
         }
+        self.invalidate_render_cache();
         if self.auto_scroll {
             self.scroll_offset = 0;
         }
@@ -259,6 +286,7 @@ impl Viewport {
         if user_msg_idx + 1 < self.messages.len() {
             if let Some(ref mut t) = self.messages[user_msg_idx + 1].thinking {
                 t.collapsed = !t.collapsed;
+                self.invalidate_render_cache();
             }
         }
     }
@@ -292,6 +320,7 @@ impl Viewport {
         });
         self.auto_scroll = true;
         self.scroll_offset = 0;
+        self.invalidate_render_cache();
     }
 
     /// Add an error message (displayed as system message).
@@ -306,6 +335,7 @@ impl Viewport {
         });
         self.auto_scroll = true;
         self.scroll_offset = 0;
+        self.invalidate_render_cache();
     }
 
     /// Add a horizontal separator line (full dialogue boundary).
@@ -318,6 +348,7 @@ impl Viewport {
             tool_calls: Vec::new(),
             separator: Some(crate::types::SeparatorKind::Full),
         });
+        self.invalidate_render_cache();
     }
 
     /// Add a sub-separator for within-dialogue breaks (dark gray).
@@ -330,6 +361,7 @@ impl Viewport {
             tool_calls: Vec::new(),
             separator: Some(crate::types::SeparatorKind::Partial),
         });
+        self.invalidate_render_cache();
     }
 
     /// Scroll up by N lines.
@@ -364,6 +396,12 @@ impl Viewport {
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
+        let panel_width = inner.width;
+        if self.render_cache.valid && self.render_cache.width == panel_width {
+            self.render_cached_lines(frame, inner);
+            return;
+        }
+
         // Build rendered lines from messages
         let mut lines: Vec<(usize, Line)> = Vec::new();
 
@@ -373,6 +411,13 @@ impl Viewport {
                     let bg = Style::default().bg(theme.composer_bg);
                     let text_style = theme.composer_text;
                     let fill_w = inner.width as usize;
+
+                    // Leading full-width background line (visual padding above)
+                    lines.push((
+                        msg_idx,
+                        Line::from(vec![Span::styled(" ".repeat(fill_w), bg)]),
+                    ));
+
                     let content_lines: Vec<&str> = msg.content.split('\n').collect();
                     for (i, line_text) in content_lines.iter().enumerate() {
                         let prefix = if i == 0 { "❯ " } else { "  " };
@@ -472,7 +517,7 @@ impl Viewport {
                         let (heading, heading_color) = if tc.tool_type == ToolType::Shell {
                             ("[Arcana Run]: ", PIGMENT_GREEN)
                         } else {
-                            ("[Arcana Request]: ", AMBER_SAE_ECE)
+                            ("[Arcana Request]: ", PIGMENT_GREEN)
                         };
 
                         // ── Shell: full panel with inline command, timing, result ──
@@ -538,17 +583,51 @@ impl Viewport {
                                 if !result.is_empty() {
                                     lines.push((msg_idx, Line::from("")));
                                 }
-                                for line in result.lines() {
-                                    lines.push((
-                                        msg_idx,
-                                        Line::from(vec![
-                                            Span::raw("  "),
-                                            Span::styled(
-                                                line.to_string(),
-                                                Style::default().fg(TOOL_OUTPUT),
-                                            ),
-                                        ]),
-                                    ));
+                                // Split result into pre-diff content and diff section
+                                if let Some(diff_start) = result.find("diff --git") {
+                                    let pre = result[..diff_start].trim();
+                                    let diff = result[diff_start..].trim();
+                                    // Render pre-diff content (stdout/stderr)
+                                    for line in pre.lines() {
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
+                                    }
+                                    if !pre.is_empty() && !diff.is_empty() {
+                                        lines.push((msg_idx, Line::from("")));
+                                    }
+                                    // Render styled diff
+                                    let file_path = &tc.description;
+                                    for styled_line in render_styled_diff(
+                                        diff,
+                                        file_path,
+                                        inner.width.saturating_sub(2),
+                                        self.diff_collapsed,
+                                    ) {
+                                        let mut spans = vec![Span::raw("  ")];
+                                        spans.extend(styled_line.spans);
+                                        lines.push((msg_idx, Line::from(spans)));
+                                    }
+                                } else {
+                                    for line in result.lines() {
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
+                                    }
                                 }
                             }
                             lines.push((msg_idx, Line::from("")));
@@ -584,7 +663,7 @@ impl Viewport {
                             Span::styled(
                                 action.to_string(),
                                 Style::default()
-                                    .fg(AWESOME_RED)
+                                    .fg(AMBER_SAE_ECE)
                                     .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(suffix, Style::default().fg(heading_color)),
@@ -607,17 +686,47 @@ impl Viewport {
                         lines.push((msg_idx, Line::from(request_spans)));
                         if let Some(result) = &tc.result {
                             if let Some(extra) = expanded_request_result(result) {
-                                for line in extra.lines() {
-                                    lines.push((
-                                        msg_idx,
-                                        Line::from(vec![
-                                            Span::raw("  "),
-                                            Span::styled(
-                                                line.to_string(),
-                                                Style::default().fg(TOOL_OUTPUT),
-                                            ),
-                                        ]),
-                                    ));
+                                if let Some(diff_start) = extra.find("diff --git") {
+                                    let pre = extra[..diff_start].trim();
+                                    let diff = extra[diff_start..].trim();
+                                    for line in pre.lines() {
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
+                                    }
+                                    if !pre.is_empty() && !diff.is_empty() {
+                                        lines.push((msg_idx, Line::from("")));
+                                    }
+                                    for styled_line in render_styled_diff(
+                                        diff,
+                                        &tc.description,
+                                        inner.width.saturating_sub(2),
+                                        self.diff_collapsed,
+                                    ) {
+                                        let mut spans = vec![Span::raw("  ")];
+                                        spans.extend(styled_line.spans);
+                                        lines.push((msg_idx, Line::from(spans)));
+                                    }
+                                } else {
+                                    for line in extra.lines() {
+                                        lines.push((
+                                            msg_idx,
+                                            Line::from(vec![
+                                                Span::raw("  "),
+                                                Span::styled(
+                                                    line.to_string(),
+                                                    Style::default().fg(TOOL_OUTPUT),
+                                                ),
+                                            ]),
+                                        ));
+                                    }
                                 }
                                 lines.push((msg_idx, Line::from("")));
                             }
@@ -796,7 +905,14 @@ impl Viewport {
                 }
             }
         }
-        let lines = wrapped;
+        self.render_cache.width = inner.width;
+        self.render_cache.lines = wrapped;
+        self.render_cache.valid = true;
+        self.render_cached_lines(frame, inner);
+    }
+
+    fn render_cached_lines(&mut self, frame: &mut Frame, inner: Rect) {
+        let lines = &self.render_cache.lines;
 
         // --- Auto-scroll algorithm ---
         // 1. Determine cursor position (line index in `lines`)
@@ -857,10 +973,10 @@ impl Viewport {
         };
 
         let visible_lines: Vec<Line> = lines
-            .into_iter()
+            .iter()
             .skip(start_line)
             .take(visible_height)
-            .map(|(_, line)| line)
+            .map(|(_, line)| line.clone())
             .collect();
 
         let paragraph = Paragraph::new(visible_lines);
@@ -956,7 +1072,205 @@ fn expanded_request_result(result: &str) -> Option<&str> {
     }
 }
 
-/// Linearly interpolate between two RGB colors.
+/// Render a unified git diff as styled lines with line numbers, tree-sitter
+/// highlighting, and background colors. Strips git metadata headers.
+pub fn render_styled_diff<'a>(
+    diff_text: &str,
+    file_path: &str,
+    panel_width: u16,
+    collapsed: bool,
+) -> Vec<Line<'a>> {
+    let mut lines: Vec<Line> = Vec::new();
+    let mut old_line: u32 = 0;
+    let mut new_line: u32 = 0;
+
+    // Detect language from file path for tree-sitter highlighting
+    let lang = crate::highlight::detect_language(file_path).unwrap_or("");
+
+    // Collect non-header lines and their kind for highlighting
+    let mut code_lines: Vec<(DiffLineKind, String)> = Vec::new();
+
+    for line in diff_text.lines() {
+        let trimmed = line.trim();
+
+        // Skip git metadata headers
+        if trimmed.is_empty()
+            || trimmed.starts_with("diff --git")
+            || trimmed.starts_with("index ")
+            || trimmed.starts_with("--- ")
+            || trimmed.starts_with("+++ ")
+        {
+            continue;
+        }
+
+        // Parse @@ hunk header for line numbers
+        if trimmed.starts_with("@@") {
+            if let Some((old, new)) = parse_hunk_header(trimmed) {
+                old_line = old;
+                new_line = new;
+            }
+            continue;
+        }
+
+        let (kind, prefix, ln) = if line.starts_with('+') {
+            (DiffLineKind::Added, "+", Some(new_line))
+        } else if line.starts_with('-') {
+            (DiffLineKind::Removed, "-", Some(old_line))
+        } else {
+            (DiffLineKind::Context, " ", Some(new_line))
+        };
+
+        let content = if line.len() > 1 {
+            line[1..].to_string()
+        } else {
+            String::new()
+        };
+
+        // Track line numbers
+        match kind {
+            DiffLineKind::Added => new_line = new_line.saturating_add(1),
+            DiffLineKind::Removed => old_line = old_line.saturating_add(1),
+            DiffLineKind::Context => {
+                old_line = old_line.saturating_add(1);
+                new_line = new_line.saturating_add(1);
+            }
+            _ => {}
+        }
+
+        code_lines.push((kind, content.clone()));
+
+        let bg = match kind {
+            DiffLineKind::Added => DIFF_ADDED_BG,
+            DiffLineKind::Removed => DIFF_REMOVED_BG,
+            _ => Color::Reset,
+        };
+        let fg = match kind {
+            DiffLineKind::Added => Color::Rgb(0, 200, 100),
+            DiffLineKind::Removed => Color::Rgb(255, 80, 80),
+            _ => Color::Rgb(180, 180, 190),
+        };
+
+        let ln_str = ln
+            .map(|n| format!("{:>4} ", n))
+            .unwrap_or_else(|| "     ".to_string());
+
+        lines.push(Line::from(vec![
+            Span::styled(
+                ln_str,
+                Style::default().fg(Color::Rgb(100, 100, 110)).bg(bg),
+            ),
+            Span::styled(
+                format!("{}", prefix),
+                Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                content,
+                Style::default().fg(Color::Rgb(210, 210, 220)).bg(bg),
+            ),
+        ]));
+    }
+
+    // Apply tree-sitter highlighting if we have a known language and content
+    if !lang.is_empty() && !code_lines.is_empty() {
+        let source: String = code_lines
+            .iter()
+            .map(|(_, content)| format!("{}\n", content))
+            .collect();
+        let highlighted = crate::highlight::highlight_lines(&source, lang);
+
+        for (i, (kind, _)) in code_lines.iter().enumerate() {
+            if i >= lines.len() {
+                break;
+            }
+            let bg = match kind {
+                DiffLineKind::Added => DIFF_ADDED_BG,
+                DiffLineKind::Removed => DIFF_REMOVED_BG,
+                _ => Color::Reset,
+            };
+            if let Some(hl_spans) = highlighted.get(i) {
+                if !hl_spans.is_empty() {
+                    // Keep prefix (line number + +/-), replace content spans
+                    let prefix_spans: Vec<Span> = lines[i]
+                        .spans
+                        .iter()
+                        .take(2) // line number + prefix
+                        .cloned()
+                        .collect();
+                    let mut new_spans = prefix_spans;
+                    for s in hl_spans {
+                        new_spans.push(Span::styled(
+                            s.text.clone(),
+                            Style::default().fg(s.fg).bg(bg),
+                        ));
+                    }
+                    lines[i] = Line::from(new_spans);
+                }
+            }
+        }
+    }
+
+    // Truncate to max lines when collapsed, with expand hint
+    const MAX_DIFF_LINES: usize = 20;
+    if collapsed && lines.len() > MAX_DIFF_LINES {
+        let remaining = lines.len() - MAX_DIFF_LINES;
+        lines.truncate(MAX_DIFF_LINES);
+        lines.push(Line::from(vec![Span::styled(
+            format!("  ... {} more lines — ctrl+x to expand", remaining),
+            Style::default().fg(TOOL_HINT),
+        )]));
+    }
+
+    // Pad each line to fill panel_width with the appropriate background
+    let fill_w = panel_width as usize;
+    for line in &mut lines {
+        let used_w: usize = line
+            .spans
+            .iter()
+            .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+            .sum();
+        let pad = fill_w.saturating_sub(used_w);
+        if pad > 0 {
+            let last_bg = line
+                .spans
+                .last()
+                .map(|s| s.style.bg)
+                .flatten()
+                .unwrap_or(Color::Reset);
+            line.spans
+                .push(Span::styled(" ".repeat(pad), Style::default().bg(last_bg)));
+        }
+    }
+
+    lines
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffLineKind {
+    Added,
+    Removed,
+    Context,
+}
+
+fn parse_hunk_header(header: &str) -> Option<(u32, u32)> {
+    // "@@ -old_start,old_count +new_start,new_count @@"
+    let inner = header.strip_prefix("@@")?.strip_suffix("@@")?.trim();
+    let mut parts = inner.split_whitespace();
+    let old_part = parts.next()?; // -old_start,old_count
+    let new_part = parts.next()?; // +new_start,new_count
+    let old_start = old_part
+        .strip_prefix('-')?
+        .split(',')
+        .next()?
+        .parse::<u32>()
+        .ok()?;
+    let new_start = new_part
+        .strip_prefix('+')?
+        .split(',')
+        .next()?
+        .parse::<u32>()
+        .ok()?;
+    Some((old_start, new_start))
+}
 fn interpolate_color(from: Color, to: Color, t: f32) -> Color {
     match (from, to) {
         (Color::Rgb(r1, g1, b1), Color::Rgb(r2, g2, b2)) => {

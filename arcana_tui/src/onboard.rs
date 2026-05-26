@@ -242,35 +242,35 @@ fn create_global_directory(
 # Hot-reloadable: changes take effect immediately
 
 [commands]
-# Shell commands the agent is allowed to execute without confirmation
-allow = [
-    "cargo build",
-    "cargo test",
-    "cargo clippy",
-    "cargo fmt",
+# Read-only commands the agent may run through AAS without human confirmation
+safe = [
     "git status",
     "git diff",
     "git log",
+    "git show",
+    "pwd",
     "ls",
     "cat",
     "find",
     "grep",
     "rg",
-    "curl",
-    "wget",
-    "w3m",
-    "python3",
-    "node",
-    "make",
     "head",
     "tail",
     "wc",
     "sort",
     "uniq",
-    "sed",
-    "awk",
-    "jq",
     "tree",
+]
+
+# Commands the agent may run after explicit human confirmation
+allow = [
+    "cargo build",
+    "cargo test",
+    "cargo clippy",
+    "cargo fmt",
+    "python3",
+    "node",
+    "make",
 ]
 
 # Commands that always require confirmation

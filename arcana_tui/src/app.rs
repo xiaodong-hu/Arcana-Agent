@@ -52,6 +52,12 @@ struct App {
     mode_selection_index: usize,
     /// Whether terminal-native text selection is active (toggled by Ctrl+Y).
     text_selection_active: bool,
+    /// Pending authority confirmations (processed one per keypress).
+    confirmation_queue: Vec<serde_json::Value>,
+    /// Authority requests still to process in the current batch.
+    pending_requests: Vec<serde_json::Value>,
+    /// Responses collected so far in the current batch.
+    pending_responses: Vec<serde_json::Value>,
 }
 
 impl App {
@@ -84,6 +90,9 @@ impl App {
             mode_selection_active: false,
             mode_selection_index: 0,
             text_selection_active: false,
+            confirmation_queue: Vec::new(),
+            pending_requests: Vec::new(),
+            pending_responses: Vec::new(),
         }
     }
 
@@ -362,19 +371,33 @@ impl App {
             .height_for_width(area.width)
             .min(area.height / 2);
 
+        // Layout: viewport fills, composer + status at bottom
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Length(status_h),
-                Constraint::Min(5),
-                Constraint::Length(task_panel_h),
-                Constraint::Length(composer_h),
+                Constraint::Min(5),                 // viewport fills
+                Constraint::Length(task_panel_h),   // task panel
+                Constraint::Length(composer_h + 1), // composer + gap
+                Constraint::Length(status_h),       // status bar at bottom
             ])
             .split(area);
 
+        self.viewport.render(frame, chunks[0], &self.theme);
+
+        panels::render_task_panel(frame, chunks[1], &self.panel_state, &self.tasks);
+
+        // Composer area: slight lift (gap above)
+        let composer_area = Rect::new(
+            chunks[2].x,
+            chunks[2].y + 1,
+            chunks[2].width,
+            chunks[2].height.saturating_sub(1),
+        );
+        self.composer.render(frame, composer_area, &self.theme);
+
         status_bar::render_status_bar(
             frame,
-            chunks[0],
+            chunks[3],
             &self.theme,
             &self.status,
             &self.panel_state,
@@ -383,12 +406,6 @@ impl App {
             &self.tasks,
             self.agent_mode,
         );
-
-        self.viewport.render(frame, chunks[1], &self.theme);
-
-        panels::render_task_panel(frame, chunks[2], &self.panel_state, &self.tasks);
-
-        self.composer.render(frame, chunks[3], &self.theme);
 
         if self.mode == ViewMode::QueryOverlay {
             self.overlay.render(frame, area, &self.theme);
@@ -1250,20 +1267,38 @@ Hotkeys:\n\
                         app.status.session_requests += 1;
                     }
 
-                    let authority_requests = extract_authority_json_requests(&response_text);
+                    let mut authority_requests = extract_authority_json_requests(&response_text);
+                    let request_from_thinking = authority_requests.is_empty();
+                    if request_from_thinking {
+                        if let Some(thinking) = thinking_text.as_deref() {
+                            authority_requests = extract_authority_json_requests(thinking);
+                        }
+                    }
                     if authority_requests.is_empty() {
                         app.viewport.finalize_response_with_stats(stats);
                         app.viewport.add_separator();
                     } else {
-                        app.viewport.streaming_text =
-                            display_text_without_authority_requests(&response_text);
+                        app.viewport.streaming_text = if request_from_thinking
+                            && looks_like_hallucinated_tool_result(&response_text)
+                        {
+                            String::new()
+                        } else {
+                            display_text_without_authority_requests(&response_text)
+                        };
                         app.viewport.finalize_response_for_tool_calls();
                     }
 
                     // Append assistant message to conversation (with reasoning for cache)
                     let mut msg = serde_json::json!({
                         "role": "assistant",
-                        "content": response_text
+                        "content": if !authority_requests.is_empty()
+                            && request_from_thinking
+                            && looks_like_hallucinated_tool_result(&response_text)
+                        {
+                            ""
+                        } else {
+                            response_text.as_str()
+                        }
                     });
                     if let Some(thinking) = thinking_text {
                         msg["reasoning_content"] = serde_json::json!(thinking);
@@ -1280,29 +1315,34 @@ Hotkeys:\n\
                                 Some(approved) => approved,
                                 None => {
                                     // Auto-approve safe read-only operations without prompting
-                                    if is_safe_authority_request(&request) {
+                                    if socket_path.exists()
+                                        && is_safe_authority_request(&request, socket_path)
+                                    {
                                         let details = authority_request_details(&request);
                                         let safe = ApprovedAuthorityRequest {
-                                            request: confirmed_authority_request(request.clone()),
+                                            request: request.clone(),
                                             tool_type: details.tool_type,
                                             description: details.target,
                                             action: details.action.map(str::to_string),
                                         };
-                                        if let Some(key) =
-                                            authority_command_cache_key(&safe.request)
-                                        {
-                                            app.approved_commands.insert(key, safe.clone());
-                                        }
                                         safe
                                     } else {
+                                        // TUI-based inline confirmation (no shell prompt)
                                         event_handle.abort();
-                                        tui.suspend()?;
-                                        let approval = approve_authority_request(request.clone())?;
-                                        tui.resume()?;
-                                        let (tx, rx, handle) = event::spawn_event_reader();
-                                        event_tx = tx;
-                                        events = rx;
-                                        event_handle = handle;
+                                        let (tx, mut rx, handle) = event::spawn_event_reader();
+                                        let approval = tui_approve_authority_request(
+                                            &mut app,
+                                            &mut tui,
+                                            &tx,
+                                            &mut rx,
+                                            request.clone(),
+                                        )?;
+                                        handle.abort();
+                                        // Respawn the main event reader
+                                        let (tx2, rx2, handle2) = event::spawn_event_reader();
+                                        event_tx = tx2;
+                                        events = rx2;
+                                        event_handle = handle2;
 
                                         match approval {
                                             AuthorityApproval::Approved(approved) => {
@@ -1568,23 +1608,34 @@ pub async fn single_shot(
             last_usage = Some(usage.clone());
         }
 
-        if let Some(reasoning) = data["choices"][0]["message"]["reasoning_content"].as_str() {
-            if !reasoning.is_empty() {
-                println!("\x1b[2m<thinking>\n{}\n</thinking>\x1b[0m\n", reasoning);
-            }
+        let reasoning = data["choices"][0]["message"]["reasoning_content"]
+            .as_str()
+            .unwrap_or("");
+        if !reasoning.is_empty() {
+            println!("\x1b[2m<thinking>\n{}\n</thinking>\x1b[0m\n", reasoning);
         }
 
         let content = data["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
             .to_string();
-        let requests = extract_authority_json_requests(&content);
+        let mut requests = extract_authority_json_requests(&content);
+        let request_from_thinking = requests.is_empty();
+        if request_from_thinking {
+            requests = extract_authority_json_requests(reasoning);
+        }
         if requests.is_empty() {
             println!("{}", content);
             break;
         }
 
-        messages.push(serde_json::json!({"role": "assistant", "content": content}));
+        let assistant_content =
+            if request_from_thinking && looks_like_hallucinated_tool_result(&content) {
+                ""
+            } else {
+                content.as_str()
+            };
+        messages.push(serde_json::json!({"role": "assistant", "content": assistant_content}));
 
         let socket_path = Path::new(".arcana/authority.sock");
         let mut responses = Vec::new();
@@ -1673,6 +1724,14 @@ fn build_system_prompt(mode: AgentMode) -> String {
              Answer profoundly, pedagogically, and concisely."
             .to_string(),
         AgentMode::Agent => {
+            let bridge_contract = "\
+# AAS Bridge Contract
+AAS requests must be emitted in visible assistant content, never only in hidden reasoning/thinking.
+When you need AAS, output exactly one JSON object per line, with no markdown, prose, or code fence, then stop the message.
+Arcana-Agent will execute/deny the request through AAS and return JSON as the next user message.
+After emitting an AAS request, do not claim results, stdout, stderr, file contents, web contents, or status until AAS returns them.
+If AAS returns denied or aborted, report that result and stop that operation.";
+
             // 1. Structured authority config (generated by AAS daemon)
             let authority_config =
                 fs::read_to_string(".arcana/authorized_prompt.md").unwrap_or_default();
@@ -1684,6 +1743,7 @@ fn build_system_prompt(mode: AgentMode) -> String {
             let behavior = crate::behavioral::load_or_create().unwrap_or_default();
 
             let mut parts: Vec<String> = Vec::new();
+            parts.push(bridge_contract.to_string());
             if !authority_config.trim().is_empty() {
                 parts.push(authority_config.trim().to_string());
             }
@@ -2124,6 +2184,123 @@ fn decode_html_entities(text: &str) -> String {
         .replace("&trade;", "™")
 }
 
+/// TUI-based inline confirmation: shows the request in the viewport with a
+/// confirmation panel, keeps the UI fully visible, and waits for a keypress.
+fn tui_approve_authority_request(
+    app: &mut App,
+    tui: &mut Tui,
+    tx: &tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    mut request: serde_json::Value,
+) -> Result<AuthorityApproval, Box<dyn std::error::Error>> {
+    loop {
+        let details = authority_request_details(&request);
+
+        // Add tool call with confirmation prompt
+        let confirm_idx = app
+            .viewport
+            .messages
+            .iter()
+            .rev()
+            .find(|m| m.role == MessageRole::Agent)
+            .map(|m| m.tool_calls.len())
+            .unwrap_or(0);
+
+        app.viewport.add_tool_call(ToolCall {
+            tool_type: details.tool_type,
+            description: details.target.clone(),
+            action: details.action.map(str::to_string),
+            result: Some(format!("?  Yes [y/Enter]  |  Edit [e]  |  No [n]")),
+            duration_ms: 0,
+            collapsed: false,
+        });
+
+        // Render with confirmation visible
+        tui.draw(|frame| app.render(frame))?;
+
+        // Wait for a key (use block_in_place to not block the tokio runtime)
+        let answer = loop {
+            let evt = tokio::task::block_in_place(|| rx.blocking_recv());
+            match evt {
+                Some(AppEvent::Key(key)) => {
+                    let action = classify_key(&key);
+                    match action {
+                        KeyAction::Char('y') | KeyAction::Enter => break "y",
+                        KeyAction::Char('n') | KeyAction::Escape => break "n",
+                        KeyAction::Char('e') => break "e",
+                        _ => {
+                            tui.draw(|frame| app.render(frame))?;
+                        }
+                    }
+                }
+                Some(_) => {} // ignore ticks, resizes, etc.
+                None => break "n",
+            }
+        };
+
+        // Update the tool call with result
+        if let Some(msg) = app
+            .viewport
+            .messages
+            .iter_mut()
+            .rev()
+            .find(|m| m.role == MessageRole::Agent)
+        {
+            // Remove the confirmation tool call — caller will add the real one
+            msg.tool_calls.pop();
+        }
+
+        match answer {
+            "y" => {
+                return Ok(AuthorityApproval::Approved(ApprovedAuthorityRequest {
+                    request: confirmed_authority_request(request),
+                    tool_type: details.tool_type,
+                    description: details.target,
+                    action: details.action.map(str::to_string),
+                }));
+            }
+            "e" => {
+                tui.suspend()?;
+                let edit_result = edit_authority_target(&details.target);
+                tui.resume()?;
+                match edit_result {
+                    Ok(edited) if !edited.trim().is_empty() => {
+                        request = edit_authority_request_target(request, edited.trim());
+                        continue;
+                    }
+                    Ok(_) => {
+                        return Ok(aborted_authority_approval(
+                            details.tool_type,
+                            details.target,
+                            details.action,
+                            details.abort_error_type,
+                            format!("{} edit produced an empty request", details.kind),
+                        ));
+                    }
+                    Err(e) => {
+                        return Ok(aborted_authority_approval(
+                            details.tool_type,
+                            details.target,
+                            details.action,
+                            details.abort_error_type,
+                            format!("{} edit failed: {e}", details.kind),
+                        ));
+                    }
+                }
+            }
+            _ => {
+                return Ok(aborted_authority_approval(
+                    details.tool_type,
+                    details.target.clone(),
+                    details.action,
+                    details.abort_error_type,
+                    format!("{} aborted by user: {}", details.kind, details.target),
+                ));
+            }
+        }
+    }
+}
+
 fn approve_authority_request(
     mut request: serde_json::Value,
 ) -> Result<AuthorityApproval, Box<dyn std::error::Error>> {
@@ -2379,109 +2556,127 @@ fn confirmed_authority_request(mut request: serde_json::Value) -> serde_json::Va
     request
 }
 
-/// Safe read-only commands that never need human confirmation.
-const SAFE_COMMANDS: &[&str] = &[
-    "echo",
-    "ls",
-    "cat",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "grep",
-    "egrep",
-    "fgrep",
-    "rg",
-    "find",
-    "locate",
-    "wc",
-    "sort",
-    "uniq",
-    "cut",
-    "tr",
-    "awk",
-    "sed",
-    "file",
-    "stat",
-    "du",
-    "df",
-    "which",
-    "type",
-    "whereis",
-    "pwd",
-    "env",
-    "printenv",
-    "whoami",
-    "hostname",
-    "uname",
-    "date",
-    "cal",
-    "uptime",
-    "ps",
-    "top",
-    "git diff",
-    "git status",
-    "git log",
-    "git show",
-    "git branch",
-    "git tag",
-    "git remote",
-    "git stash list",
-    "tree",
-];
-
 /// Check whether an authority request can be auto-approved without human confirmation.
-fn is_safe_authority_request(request: &serde_json::Value) -> bool {
+fn is_safe_authority_request(request: &serde_json::Value, socket_path: &Path) -> bool {
     let op = request.get("op").and_then(|op| op.as_str()).unwrap_or("");
 
-    // Safe: read-only file operations within project workspace (not .arcana/, /etc, /proc)
+    // Safe by default: read-only file operations inside the project tree,
+    // excluding Arcana's project workspace and obvious absolute system paths.
     if matches!(op, "read" | "read_text" | "query") {
         if let Some(path) = request.get("path").and_then(|p| p.as_str()) {
-            if !path.contains(".arcana") && !path.starts_with("/etc") && !path.starts_with("/proc")
-            {
+            if is_default_safe_project_read(path) {
                 return true;
             }
         }
     }
 
-    // Safe: well-known read-only shell commands
-    if op == "exec_shell" {
-        if let Some(command) = request.get("command").and_then(|c| c.as_str()) {
-            let first_line = command.lines().next().unwrap_or("").trim();
-            return SAFE_COMMANDS.iter().any(|safe| {
-                first_line == *safe
-                    || first_line.starts_with(&format!("{safe} "))
-                    || (safe.starts_with("git ") && first_line == *safe)
-            });
+    let safe_rules = authority_safe_command_rules(socket_path);
+    if safe_rules.is_empty() {
+        return false;
+    }
+
+    match op {
+        "exec_shell" => request
+            .get("command")
+            .and_then(|command| command.as_str())
+            .map(|command| {
+                safe_rules
+                    .iter()
+                    .any(|rule| safe_shell_rule_matches(rule, command))
+            })
+            .unwrap_or(false),
+        "exec" => {
+            let cmd = request
+                .get("cmd")
+                .and_then(|cmd| cmd.as_str())
+                .unwrap_or("");
+            let args = request
+                .get("args")
+                .and_then(|args| args.as_array())
+                .map(|args| {
+                    args.iter()
+                        .filter_map(|arg| arg.as_str())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let full = if args.is_empty() {
+                cmd.to_string()
+            } else {
+                format!("{} {}", cmd, args.join(" "))
+            };
+            safe_rules
+                .iter()
+                .any(|rule| rule == cmd || rule == &full || glob_like_match(rule, &full))
+        }
+        _ => false,
+    }
+}
+
+fn is_default_safe_project_read(path: &str) -> bool {
+    let path = path.trim();
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with('~')
+        || path == ".arcana"
+        || path.starts_with(".arcana/")
+        || path.contains("/.arcana/")
+        || path.starts_with("../")
+        || path.contains("/../")
+    {
+        return false;
+    }
+    true
+}
+
+fn authority_safe_command_rules(socket_path: &Path) -> Vec<String> {
+    let Ok(response) = authority_request(socket_path, serde_json::json!({"op":"list_authority"}))
+    else {
+        return Vec::new();
+    };
+    let Some(commands) = response.pointer("/snapshot/commands") else {
+        return Vec::new();
+    };
+
+    let mut rules = Vec::new();
+    if let Some(items) = commands.get("safe").and_then(|items| items.as_array()) {
+        for item in items {
+            if let Some(rule) = item.as_str() {
+                if !rules.iter().any(|existing| existing == rule) {
+                    rules.push(rule.to_string());
+                }
+            }
         }
     }
+    rules
+}
 
-    if op == "exec" {
-        let cmd = request.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
-        return SAFE_COMMANDS.iter().any(|safe| {
-            cmd == *safe
-                || (safe.starts_with("git ") && cmd == "git" && {
-                    let args = request.get("args").and_then(|a| a.as_array());
-                    if let Some(args) = args {
-                        if let Some(sub) = args.first().and_then(|a| a.as_str()) {
-                            return matches!(
-                                sub,
-                                "diff"
-                                    | "status"
-                                    | "log"
-                                    | "show"
-                                    | "branch"
-                                    | "tag"
-                                    | "remote"
-                                    | "stash"
-                            );
-                        }
-                    }
-                    false
-                })
-        });
+fn safe_shell_rule_matches(rule: &str, command: &str) -> bool {
+    let command = command.trim();
+    if command == ".arcana"
+        || command.contains(".arcana/")
+        || command.contains("/.arcana/")
+        || !shell_command_is_simple(command)
+    {
+        return false;
     }
+    let first_line = command.lines().next().unwrap_or("").trim();
+    let first_word = first_line.split_whitespace().next().unwrap_or("");
+    rule == first_word || rule == first_line || glob_like_match(rule, first_line)
+}
 
+fn shell_command_is_simple(command: &str) -> bool {
+    !command
+        .chars()
+        .any(|ch| matches!(ch, ';' | '|' | '&' | '>' | '<' | '`' | '$' | '\n' | '\r'))
+}
+
+fn glob_like_match(pattern: &str, value: &str) -> bool {
+    if pattern == "*" {
+        return true;
+    }
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        return value.starts_with(prefix) && value.ends_with(suffix);
+    }
     false
 }
 
@@ -2683,6 +2878,22 @@ fn display_text_without_authority_requests(content: &str) -> String {
         .to_string()
 }
 
+fn looks_like_hallucinated_tool_result(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return false;
+    };
+    value.get("status").is_some()
+        || value.get("success").is_some()
+        || value.get("result").is_some()
+        || value.get("stdout").is_some()
+        || value.get("stderr").is_some()
+        || value.get("exit_code").is_some()
+}
+
 fn extract_authority_json_request_matches(content: &str) -> Vec<AuthorityJsonRequestMatch> {
     let mut requests = Vec::new();
     let mut candidate = String::new();
@@ -2848,6 +3059,17 @@ mod tests {
             display_text_without_authority_requests(content),
             "I'll ask AAS."
         );
+    }
+
+    #[test]
+    fn extracts_authority_json_from_thinking_text() {
+        let thinking = "Use AAS.\n{\"op\":\"exec_shell\",\"command\":\"ls -a\"}";
+        let visible = "{\"status\":\"success\",\"result\":{\"stdout\":\"fake\"}}";
+
+        let requests = extract_authority_json_requests(thinking);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["op"], "exec_shell");
+        assert!(looks_like_hallucinated_tool_result(visible));
     }
 
     #[test]

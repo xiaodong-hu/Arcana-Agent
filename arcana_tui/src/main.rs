@@ -577,6 +577,8 @@ mod auth_cmd {
 
     #[derive(Debug, Clone, Serialize, Deserialize, Default)]
     pub struct CommandsConfig {
+        #[serde(default = "default_safe")]
+        pub safe: Vec<String>,
         #[serde(default = "default_allow")]
         pub allow: Vec<String>,
         #[serde(default = "default_confirm")]
@@ -601,35 +603,55 @@ mod auth_cmd {
         pub deny: Vec<String>,
     }
 
+    fn default_safe() -> Vec<String> {
+        vec![
+            "git status",
+            "git diff",
+            "git log",
+            "git show",
+            "pwd",
+            "ls",
+            "cat",
+            "find",
+            "grep",
+            "rg",
+            "head",
+            "tail",
+            "wc",
+            "sort",
+            "uniq",
+            "cut",
+            "tr",
+            "file",
+            "stat",
+            "du",
+            "df",
+            "which",
+            "type",
+            "whereis",
+            "whoami",
+            "hostname",
+            "uname",
+            "date",
+            "git branch",
+            "git tag",
+            "git remote",
+            "tree",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
     fn default_allow() -> Vec<String> {
         vec![
             "cargo build",
             "cargo test",
             "cargo clippy",
             "cargo fmt",
-            "git status",
-            "git diff",
-            "git log",
-            "ls",
-            "cat",
-            "find",
-            "grep",
-            "rg",
-            "curl",
-            "wget",
-            "w3m",
             "python3",
             "node",
             "make",
-            "head",
-            "tail",
-            "wc",
-            "sort",
-            "uniq",
-            "sed",
-            "awk",
-            "jq",
-            "tree",
         ]
         .into_iter()
         .map(String::from)
@@ -694,6 +716,7 @@ mod auth_cmd {
         fn default() -> Self {
             Self {
                 commands: CommandsConfig {
+                    safe: default_safe(),
                     allow: default_allow(),
                     confirm: default_confirm(),
                 },
@@ -740,7 +763,11 @@ mod auth_cmd {
                 let config = load()?;
                 let path = authority_path()?;
                 println!("  Authority config: {}\n", path.display());
-                println!("  [commands.allow]");
+                println!("  [commands.safe]");
+                for cmd in &config.commands.safe {
+                    println!("    ✓ {}", cmd);
+                }
+                println!("\n  [commands.allow]");
                 for cmd in &config.commands.allow {
                     println!("    ✓ {}", cmd);
                 }
