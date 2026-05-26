@@ -4,8 +4,8 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::highlight;
 
 const LIGHT_GRAY: Color = Color::Rgb(160, 160, 170);
-const BG_ADDED: Color = Color::Rgb(0, 55, 30);    // dark green bg
-const BG_REMOVED: Color = Color::Rgb(70, 10, 10);  // dark red bg
+const BG_ADDED: Color = Color::Rgb(0, 55, 30); // dark green bg
+const BG_REMOVED: Color = Color::Rgb(70, 10, 10); // dark red bg
 const BG_HEADER: Color = Color::Rgb(40, 40, 60);
 
 /// A single line in a diff.

@@ -2235,14 +2235,18 @@ fn tui_approve_authority_request(
                     }
                     Ok(_) => {
                         return Ok(aborted_authority_approval(
-                            details.tool_type, details.target, details.action,
+                            details.tool_type,
+                            details.target,
+                            details.action,
                             details.abort_error_type,
                             format!("{} edit produced an empty request", details.kind),
                         ));
                     }
                     Err(e) => {
                         return Ok(aborted_authority_approval(
-                            details.tool_type, details.target, details.action,
+                            details.tool_type,
+                            details.target,
+                            details.action,
                             details.abort_error_type,
                             format!("{} edit failed: {e}", details.kind),
                         ));
@@ -2251,7 +2255,9 @@ fn tui_approve_authority_request(
             }
             _ => {
                 return Ok(aborted_authority_approval(
-                    details.tool_type, details.target.clone(), details.action,
+                    details.tool_type,
+                    details.target.clone(),
+                    details.action,
                     details.abort_error_type,
                     format!("{} aborted by user: {}", details.kind, details.target),
                 ));
