@@ -12,6 +12,7 @@ use crate::record::{MutationReport, Record};
 use crate::types::{AccessLevel, AuthorityErrorType, Request, Response, RuleVerdict};
 
 pub struct Server {
+    listener: UnixListener,
     socket_path: PathBuf,
     authority: Authority,
     record: Record,
@@ -26,9 +27,11 @@ impl Server {
         let web_cache_dir = project_root.join(".arcana/web_cache");
         let tmp_dir = project_root.join(".arcana/tmp");
         let prompt_path = project_root.join(".arcana/authorized_prompt.md");
-        let authority = Authority::load(project_root.clone())?;
-        let record = Record::open(&project_root)?;
 
+        // Create directories and bind the socket FIRST — before the potentially
+        // slow record scan (scan_project_tree hashes every file in the project).
+        // This ensures the TUI can detect the daemon is alive within its 5 s
+        // timeout, even for large codebases.
         if socket_path.exists() {
             fs::remove_file(&socket_path)?;
         }
@@ -36,12 +39,20 @@ impl Server {
         fs::create_dir_all(web_cache_dir.join("pages"))?;
         fs::create_dir_all(&tmp_dir)?;
 
+        let listener = UnixListener::bind(&socket_path)?;
+        eprintln!("[Arcana] Listening on {:?}", socket_path);
+
+        // Now do the heavier initialisation
+        let authority = Authority::load(project_root.clone())?;
+        let record = Record::open(&project_root)?;
+
         // Generate authorized_prompt.md on startup
         let prompt_content = prompt::generate_prompt(&authority)?;
         fs::write(&prompt_path, &prompt_content)?;
         eprintln!("[Arcana] Generated {:?}", prompt_path);
 
         Ok(Self {
+            listener,
             socket_path,
             authority,
             record,
@@ -52,19 +63,15 @@ impl Server {
     }
 
     pub fn run(&mut self) -> io::Result<()> {
-        let listener = UnixListener::bind(&self.socket_path)?;
-        eprintln!("[Arcana] Listening on {:?}", self.socket_path);
-        for stream in listener.incoming() {
-            match stream {
-                Ok(s) => {
-                    if let Err(e) = self.handle_connection(s) {
-                        eprintln!("[Arcana] Error: {}", e);
-                    }
-                }
-                Err(e) => eprintln!("[Arcana] Accept error: {}", e),
+        // Listener is already bound — accept connections in a loop.
+        // Use accept() (not incoming()) to avoid a long-lived borrow on
+        // self.listener that would conflict with &mut self in handle_connection.
+        loop {
+            let (stream, _) = self.listener.accept()?;
+            if let Err(e) = self.handle_connection(stream) {
+                eprintln!("[Arcana] Error: {}", e);
             }
         }
-        Ok(())
     }
 
     fn handle_connection(&mut self, stream: UnixStream) -> io::Result<()> {

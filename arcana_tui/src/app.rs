@@ -520,6 +520,7 @@ fn render_toasts(frame: &mut Frame, area: Rect, toasts: &[Toast]) {
 
 struct AuthorityDaemon {
     child: Option<Child>,
+    _stderr_drainer: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for AuthorityDaemon {
@@ -532,11 +533,14 @@ impl Drop for AuthorityDaemon {
 }
 
 fn ensure_authority_daemon(
-    inherit_terminal: bool,
+    _inherit_terminal: bool,
 ) -> Result<AuthorityDaemon, Box<dyn std::error::Error>> {
     let socket_path = Path::new(".arcana/authority.sock");
     if authority_socket_ready(socket_path) {
-        return Ok(AuthorityDaemon { child: None });
+        return Ok(AuthorityDaemon {
+            child: None,
+            _stderr_drainer: None,
+        });
     }
     if socket_path.exists() {
         fs::remove_file(socket_path)?;
@@ -546,29 +550,46 @@ fn ensure_authority_daemon(
         .ok_or("cannot find authority_and_recording binary; build it before launching Arcana")?;
     let mut command = std::process::Command::new(binary);
     command.arg(".");
-    if inherit_terminal {
-        command
-            .stdin(Stdio::inherit())
-            .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
-    } else {
-        command
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-    }
+    command.stdin(Stdio::null()).stdout(Stdio::null());
+    // Always capture stderr so we can surface daemon errors in the timeout message
+    command.stderr(Stdio::piped());
 
     let mut child = command.spawn()?;
     for _ in 0..50 {
         if authority_socket_ready(socket_path) {
-            return Ok(AuthorityDaemon { child: Some(child) });
+            // Daemon is up — drain stderr in background so pipe doesn't fill
+            let stderr = child.stderr.take();
+            let drainer = stderr.map(|mut reader| {
+                std::thread::spawn(move || {
+                    let mut buf = Vec::new();
+                    let _ = reader.read_to_end(&mut buf);
+                })
+            });
+            return Ok(AuthorityDaemon {
+                child: Some(child),
+                _stderr_drainer: drainer,
+            });
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 
+    // Timeout: kill first so the stderr pipe reaches EOF, then collect
     let _ = child.kill();
+    let mut stderr_output = String::new();
+    if let Some(ref mut stderr) = child.stderr {
+        let _ = stderr.read_to_string(&mut stderr_output);
+    }
     let _ = child.wait();
-    Err("authority daemon did not create .arcana/authority.sock in time".into())
+    Err(format!(
+        "authority daemon did not create .arcana/authority.sock in time (5 s)\n\
+         daemon stderr: {}",
+        if stderr_output.trim().is_empty() {
+            "(empty)"
+        } else {
+            stderr_output.trim()
+        }
+    )
+    .into())
 }
 
 fn authority_socket_ready(socket_path: &Path) -> bool {
