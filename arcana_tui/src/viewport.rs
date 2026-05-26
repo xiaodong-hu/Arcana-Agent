@@ -32,6 +32,8 @@ pub struct Viewport {
     pub think_collapsed: bool,
     /// Whether tool-call panels are collapsed
     pub tool_calls_collapsed: bool,
+    /// Whether inline diffs are truncated to ~20 lines (toggled with Ctrl+X)
+    pub diff_collapsed: bool,
     /// Last rendered visual line count, used to keep manual-scroll views stable as content grows.
     last_total_lines: usize,
 }
@@ -54,6 +56,7 @@ impl Default for Viewport {
             is_streaming: false,
             think_collapsed: true,
             tool_calls_collapsed: false,
+            diff_collapsed: true,
             last_total_lines: 0,
         }
     }
@@ -205,10 +208,10 @@ impl Viewport {
         self.scroll_offset = 0;
     }
 
-    /// Toggle all Shell tool-call panels expand/collapse (Ctrl+X).
-    /// Non-Shell (authority request) panels are always compact and unaffected.
+    /// Toggle all Shell tool-call panels expand/collapse + diff truncation (Ctrl+X).
     pub fn toggle_tool_calls(&mut self) {
         self.tool_calls_collapsed = !self.tool_calls_collapsed;
+        self.diff_collapsed = !self.diff_collapsed;
         for msg in &mut self.messages {
             for tc in &mut msg.tool_calls {
                 if tc.tool_type == ToolType::Shell {
@@ -574,6 +577,7 @@ impl Viewport {
                                         diff,
                                         file_path,
                                         inner.width.saturating_sub(2),
+                                        self.diff_collapsed,
                                     ) {
                                         let mut spans = vec![Span::raw("  ")];
                                         spans.extend(styled_line.spans);
@@ -672,6 +676,7 @@ impl Viewport {
                                         diff,
                                         &tc.description,
                                         inner.width.saturating_sub(2),
+                                        self.diff_collapsed,
                                     ) {
                                         let mut spans = vec![Span::raw("  ")];
                                         spans.extend(styled_line.spans);
@@ -1030,7 +1035,12 @@ fn expanded_request_result(result: &str) -> Option<&str> {
 
 /// Render a unified git diff as styled lines with line numbers, tree-sitter
 /// highlighting, and background colors. Strips git metadata headers.
-pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str, panel_width: u16) -> Vec<Line<'a>> {
+pub fn render_styled_diff<'a>(
+    diff_text: &str,
+    file_path: &str,
+    panel_width: u16,
+    collapsed: bool,
+) -> Vec<Line<'a>> {
     let mut lines: Vec<Line> = Vec::new();
     let mut old_line: u32 = 0;
     let mut new_line: u32 = 0;
@@ -1158,6 +1168,17 @@ pub fn render_styled_diff<'a>(diff_text: &str, file_path: &str, panel_width: u16
                 }
             }
         }
+    }
+
+    // Truncate to max lines when collapsed, with expand hint
+    const MAX_DIFF_LINES: usize = 20;
+    if collapsed && lines.len() > MAX_DIFF_LINES {
+        let remaining = lines.len() - MAX_DIFF_LINES;
+        lines.truncate(MAX_DIFF_LINES);
+        lines.push(Line::from(vec![Span::styled(
+            format!("  ... {} more lines — ctrl+x to expand", remaining),
+            Style::default().fg(TOOL_HINT),
+        )]));
     }
 
     // Pad each line to fill panel_width with the appropriate background
