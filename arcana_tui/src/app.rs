@@ -2211,72 +2211,52 @@ fn tui_approve_authority_request(
             .rev()
             .find(|m| m.role == MessageRole::Agent)
         {
-            if let Some(tc) = msg.tool_calls.last_mut() {
-                match answer {
-                    "y" => {
-                        tc.result = Some("OK.".to_string());
-                        return Ok(AuthorityApproval::Approved(ApprovedAuthorityRequest {
-                            request: confirmed_authority_request(request),
-                            tool_type: details.tool_type,
-                            description: details.target,
-                            action: details.action.map(str::to_string),
-                        }));
+            // Remove the confirmation tool call — caller will add the real one
+            msg.tool_calls.pop();
+        }
+
+        match answer {
+            "y" => {
+                return Ok(AuthorityApproval::Approved(ApprovedAuthorityRequest {
+                    request: confirmed_authority_request(request),
+                    tool_type: details.tool_type,
+                    description: details.target,
+                    action: details.action.map(str::to_string),
+                }));
+            }
+            "e" => {
+                tui.suspend()?;
+                let edit_result = edit_authority_target(&details.target);
+                tui.resume()?;
+                match edit_result {
+                    Ok(edited) if !edited.trim().is_empty() => {
+                        request = edit_authority_request_target(request, edited.trim());
+                        continue;
                     }
-                    "e" => {
-                        // Suspend TUI for external editor
-                        tui.suspend()?;
-                        let edit_result = edit_authority_target(&details.target);
-                        tui.resume()?;
-                        match edit_result {
-                            Ok(edited) if !edited.trim().is_empty() => {
-                                request = edit_authority_request_target(request, edited.trim());
-                                // Remove the temporary tool call and loop again
-                                msg.tool_calls.pop();
-                                continue;
-                            }
-                            Ok(_) => {
-                                tc.result = Some("Aborted (empty edit).".to_string());
-                                return Ok(aborted_authority_approval(
-                                    details.tool_type,
-                                    details.target,
-                                    details.action,
-                                    details.abort_error_type,
-                                    format!("{} edit produced an empty request", details.kind),
-                                ));
-                            }
-                            Err(e) => {
-                                tc.result = Some(format!("Aborted (edit failed: {e})."));
-                                return Ok(aborted_authority_approval(
-                                    details.tool_type,
-                                    details.target,
-                                    details.action,
-                                    details.abort_error_type,
-                                    format!("{} edit failed: {e}", details.kind),
-                                ));
-                            }
-                        }
-                    }
-                    _ => {
-                        tc.result = Some("Aborted.".to_string());
+                    Ok(_) => {
                         return Ok(aborted_authority_approval(
-                            details.tool_type,
-                            details.target.clone(),
-                            details.action,
+                            details.tool_type, details.target, details.action,
                             details.abort_error_type,
-                            format!("{} aborted by user: {}", details.kind, details.target),
+                            format!("{} edit produced an empty request", details.kind),
+                        ));
+                    }
+                    Err(e) => {
+                        return Ok(aborted_authority_approval(
+                            details.tool_type, details.target, details.action,
+                            details.abort_error_type,
+                            format!("{} edit failed: {e}", details.kind),
                         ));
                     }
                 }
             }
+            _ => {
+                return Ok(aborted_authority_approval(
+                    details.tool_type, details.target.clone(), details.action,
+                    details.abort_error_type,
+                    format!("{} aborted by user: {}", details.kind, details.target),
+                ));
+            }
         }
-        // Fallback
-        return Ok(aborted_authority_approval(
-            details.tool_type,
-            details.target,
-            details.action,
-            details.abort_error_type,
-            "confirmation lost".into(),
-        ));
     }
 }
 
