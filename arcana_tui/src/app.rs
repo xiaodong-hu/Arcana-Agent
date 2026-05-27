@@ -1345,8 +1345,18 @@ Hotkeys:\n\
                                         && is_safe_authority_request(&request, socket_path)
                                     {
                                         let details = authority_request_details(&request);
+                                        // Inject readonly flag so AAS skips the
+                                        // expensive before/after project-tree scan
+                                        let mut safe_req = request.clone();
+                                        if let Some(obj) = safe_req.as_object_mut() {
+                                            if obj.get("op").and_then(|v| v.as_str())
+                                                .map_or(false, |op| op.starts_with("exec_shell"))
+                                            {
+                                                obj.insert("readonly".to_string(), serde_json::json!(true));
+                                            }
+                                        }
                                         let safe = ApprovedAuthorityRequest {
-                                            request: request.clone(),
+                                            request: safe_req,
                                             tool_type: details.tool_type,
                                             description: details.target,
                                             action: details.action.map(str::to_string),

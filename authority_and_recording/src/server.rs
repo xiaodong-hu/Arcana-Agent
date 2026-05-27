@@ -123,8 +123,10 @@ impl Server {
             Request::FetchConfirmed { url, tag: _ } => self.handle_fetch_confirmed(&url),
             Request::Exec { cmd, args } => self.handle_exec(&cmd, &args),
             Request::ExecConfirmed { cmd, args } => self.handle_exec_confirmed(&cmd, &args),
-            Request::ExecShell { command } => self.handle_exec_shell(&command),
-            Request::ExecShellConfirmed { command } => self.handle_exec_shell_confirmed(&command),
+            Request::ExecShell { command, readonly } => self.handle_exec_shell(&command, readonly),
+            Request::ExecShellConfirmed { command, readonly } => {
+                self.handle_exec_shell_confirmed(&command, readonly)
+            }
             Request::RegisterTool {
                 name,
                 path,
@@ -474,7 +476,7 @@ impl Server {
                         if edited == full_cmd {
                             true
                         } else {
-                            return self.handle_exec_shell(&edited);
+                            return self.handle_exec_shell(&edited, false);
                         }
                     }
                     Approval::Aborted {
@@ -520,7 +522,7 @@ impl Server {
         })
     }
 
-    fn handle_exec_shell(&mut self, command: &str) -> io::Result<Response> {
+    fn handle_exec_shell(&mut self, command: &str, readonly: bool) -> io::Result<Response> {
         let command = match self.authority.editable_approval(
             "Tool Call",
             command,
@@ -539,16 +541,26 @@ impl Server {
         };
 
         let project_root = self.authority.project_root().to_path_buf();
-        self.exec_with_recording(|| {
-            Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(&project_root)
-                .output()
-        })
+        if readonly {
+            self.exec_without_recording(|| {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .current_dir(&project_root)
+                    .output()
+            })
+        } else {
+            self.exec_with_recording(|| {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .current_dir(&project_root)
+                    .output()
+            })
+        }
     }
 
-    fn handle_exec_shell_confirmed(&mut self, command: &str) -> io::Result<Response> {
+    fn handle_exec_shell_confirmed(&mut self, command: &str, readonly: bool) -> io::Result<Response> {
         let args = vec!["-c".to_string(), command.to_string()];
         if let RuleVerdict::Deny = self.authority.check_tool("sh", &args) {
             return Ok(Response::Denied {
@@ -557,13 +569,23 @@ impl Server {
         }
 
         let project_root = self.authority.project_root().to_path_buf();
-        self.exec_with_recording(|| {
-            Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&project_root)
-                .output()
-        })
+        if readonly {
+            self.exec_without_recording(|| {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .current_dir(&project_root)
+                    .output()
+            })
+        } else {
+            self.exec_with_recording(|| {
+                Command::new("sh")
+                    .arg("-c")
+                    .arg(command)
+                    .current_dir(&project_root)
+                    .output()
+            })
+        }
     }
 
     fn handle_register_tool(
@@ -810,6 +832,23 @@ impl Server {
             code: output.status.code().unwrap_or(-1),
             records: report.records,
             diff: report.diff,
+        })
+    }
+
+    /// Run a shell command WITHOUT the before/after project-tree scan.
+    /// Used for read-only safe commands (ls, grep, echo, …) where recording
+    /// is unnecessary and would be prohibitively slow on large projects.
+    fn exec_without_recording<F>(&mut self, run: F) -> io::Result<Response>
+    where
+        F: FnOnce() -> io::Result<Output>,
+    {
+        let output = run()?;
+        Ok(Response::ExecResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            code: output.status.code().unwrap_or(-1),
+            records: Vec::new(),
+            diff: String::new(),
         })
     }
 }
