@@ -100,46 +100,19 @@ Inspect recorded mutations before recovering: `arcana recovery --list`. Recover 
 
 #### Command Authorization
 
-```toml
-# ~/.arcana/authority.toml — editable before or after onboard
-[commands]
-safe = [
-    "git status", "git diff", "git log",
-    "ls", "cat", "find", "grep", "rg",
-    "head", "tail", "wc", "sort", "uniq", "tree",
-]
-allow = [
-    "cargo build", "cargo test", "cargo clippy", "cargo fmt",
-    "python3", "node",
-]
+Arcana ships with a curated default `authority.toml` (see [`assets/authority.toml`](assets/authority.toml)) that is written to `~/.arcana/authority.toml` on first onboard.  Key categories:
 
-confirm = ["git push", "git commit", "rm -rf", "sudo *"]
-
-[network]
-allow = [
-    "api.deepseek.com", "api.openai.com", "api.anthropic.com",
-    "scholar.google.com", "arxiv.org", "*.arxiv.org",
-    "en.wikipedia.org", "*.wikipedia.org", "wiki.archlinux.org",
-    "stackoverflow.com", "*.stackoverflow.com", "*.stackexchange.com",
-    "docs.rs", "crates.io", "github.com", "gitlab.com",
-    "zhihu.com", "*.zhihu.com",
-]
-deny = ["*"]
-
-[filesystem]
-writable = ["."]
-readonly = ["/etc", "/usr"]
-deny = ["~/.ssh", "~/.gnupg", "~/.arcana/authority.toml"]
-```
+- **`safe`** — read-only commands, auto-approved, skip the recording scan (fastest)
+- **`allow`** — auto-approved but recorded (may mutate)
+- **`confirm`** — always requires human approval
+- **`deny`** — always rejected
+- **`network.allow / deny`** — outbound host glob patterns
+- **`filesystem.writable / readonly / deny`** — path access rules
 
 Runtime management: `\authorization list|add|remove|edit`
 
-`[commands.safe]` is the no-confirmation pool for read-only commands such as
-`ls` and `cat`. These commands still execute through AAS; they simply skip the
-human confirmation panel. `[commands.allow]` remains the broader AAS permission
-pool; Arcana-Agent may still ask before running those commands. Project file
-reads are also no-confirmation by default for paths inside the current
-workspace, except project `.arcana/`.
+Project file reads inside the current workspace are also auto-approved by default
+(except `.arcana/` internals).
 
 #### LLM Authority Instruction
 

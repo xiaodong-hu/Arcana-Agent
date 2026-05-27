@@ -1,0 +1,132 @@
+# Arcana Authority Configuration — Example
+# ==========================================
+# Place at ~/.arcana/authority.toml (global) or .arcana/authority.toml (per-project).
+# Project config overrides global config for matching keys.
+# Hot-reloadable: changes take effect on next daemon startup.
+#
+# Command categories:
+#   safe    = auto-approved, read-only, NO recording scan  (fastest)
+#   allow   = auto-approved, recorded                      (may mutate)
+#   confirm = always requires human approval
+#   deny    = always rejected
+#
+# Network / filesystem rules use glob_match patterns.
+
+[commands]
+
+# ── Safe (read-only, no recording overhead) ──────────────────────────
+# These are baked into the daemon and listed here for visibility.
+# Add your own project-specific read-only tools (e.g. custom linters).
+safe = [
+    # File listing & inspection
+    "pwd", "ls", "cat", "head", "tail", "wc",
+    "sort", "uniq", "cut", "tr",
+    # Search
+    "grep", "rg", "find",
+    # File metadata
+    "file", "stat", "du", "df",
+    # System identity
+    "which", "type", "whereis", "whoami", "hostname", "uname", "date",
+    # Directory tree
+    "tree",
+    # Git read-only
+    "git status", "git diff", "git log", "git show",
+    "git branch", "git tag", "git remote",
+]
+
+# ── Allow (auto-approved, recorded) ──────────────────────────────────
+allow = [
+    # Rust toolchain
+    "cargo build", "cargo test", "cargo clippy", "cargo fmt",
+    "cargo check", "cargo run", "cargo doc",
+    # Git mutating (commit/push are under [confirm])
+    "git add", "git rm", "git mv", "git reset",
+    "git checkout", "git switch", "git restore",
+    "git stash", "git merge", "git rebase",
+    "git cherry-pick", "git fetch", "git pull",
+    # Interpreters / runtimes
+    "python3", "python", "python3 -m",
+    "julia", "julia --project",
+    # Build tools
+    "make", "cmake",
+    # Shell text processing (can mutate with -i / redirects)
+    "sed", "awk", "jq",
+    # Network CLI (reqwest handles most web fetches internally)
+    "curl", "wget",
+    # Package managers (read-only queries)
+    "pip list", "pip show", "pip freeze",
+    "cargo search",
+]
+
+# ── Confirm (always requires human approval) ─────────────────────────
+confirm = [
+    "git push", "git push *",
+    "git commit", "git commit *",
+    "rm -rf", "rm -rf *",
+    "sudo *",
+    "pip install *", "pip uninstall *",
+    "cargo install *", "cargo uninstall *",
+    "npm install *", "npm uninstall *",
+    "chmod *", "chown *",
+]
+
+# ── Deny (always rejected) ───────────────────────────────────────────
+deny = [
+    "rm -rf /", "rm -rf ~",
+    "> /dev/sda", "dd if=",
+    "mkfs.*", "mkswap",
+    "shutdown", "reboot", "poweroff",
+    ":(){ :|:& };:", # fork bomb
+]
+
+# ════════════════════════════════════════════════════════════════════════
+
+[network]
+
+# Allowed outbound hosts (glob patterns)
+allow = [
+    # LLM API providers
+    "api.deepseek.com",
+    "api.openai.com",
+    "api.anthropic.com",
+    # Scholar & research
+    "scholar.google.com",
+    "arxiv.org", "*.arxiv.org",
+    # Wikipedia & wikis
+    "en.wikipedia.org", "*.wikipedia.org",
+    "wiki.archlinux.org",
+    "archlinux.org",
+    # Programming Q&A
+    "stackoverflow.com", "*.stackoverflow.com",
+    "*.stackexchange.com", "superuser.com",
+    # Code docs & hosting
+    "docs.rs", "crates.io",
+    "github.com", "raw.githubusercontent.com",
+    "gitlab.com", 
+    "pypi.org", 
+    # Chinese platforms
+    "zhihu.com", "*.zhihu.com", "bilibili.com", "*.bilibili.com",
+]
+
+# Block everything else by default
+deny = ["*"]
+
+# ════════════════════════════════════════════════════════════════════════
+
+[filesystem]
+
+# Writable paths (relative to project root; "." = entire project)
+writable = ["."]
+
+# Read-only paths (outside the project, for context)
+readonly = ["/etc", "/usr"]
+
+# Always denied — never readable or writable
+deny = [
+    "~/.ssh",
+    "~/.ssh/**",
+    "~/.gnupg",
+    "~/.gnupg/**",
+    "~/.arcana/authority.toml",
+    ".arcana/git_record/**",
+]

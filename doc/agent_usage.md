@@ -215,7 +215,7 @@ All daemons communicate via unix sockets in `.arcana/`. The agent process itself
 Every session begins with the authority instruction plus structured policy context:
 
 - `~/.arcana/INSTRUCTION.md` explains the AAS JSONL API and tells the model to emit raw JSON request lines for Arcana-Agent to relay.
-- `~/.arcana/authority.toml` lists system-wide command, network, and filesystem authority.
+- `~/.arcana/authority.toml` lists system-wide command, network, and filesystem authority. On first onboard, Arcana writes a curated default config (see [`assets/authority.toml`](../assets/authority.toml)).
 - `.arcana/authority.toml`, when present, lists project-specific authority additions.
 - `[commands.safe]` contains read-only commands that run through AAS without a
   human confirmation panel. Project reads inside the current workspace are also
