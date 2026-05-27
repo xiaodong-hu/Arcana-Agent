@@ -33,6 +33,15 @@ pub struct Record {
     seq: u64,
     /// In-memory tree state: path -> blob hash (tracks current project state)
     tree: HashMap<String, String>,
+    /// Stat cache: path -> (mtime_ns, file_size).
+    /// Used by scan_project_tree to skip re-reading + re-hashing files whose
+    /// stat info hasn't changed since the last scan.  Purely in-memory —
+    /// rebuilt from scratch on daemon restart (which does a full baseline
+    /// scan anyway).  Snapshot format is unchanged.
+    file_stats: HashMap<String, (i64, u64)>,
+    /// Patterns from .gitignore (project root).  Files/dirs matching these
+    /// are excluded from the recorded tree.  Empty → record everything.
+    gitignore_patterns: Vec<String>,
 }
 
 impl Record {
@@ -53,16 +62,28 @@ impl Record {
         };
 
         let tree = Self::rebuild_tree(&record_dir, seq)?;
-        let mut record = Self {
+        let gitignore_patterns = load_gitignore(&project_root);
+        if !gitignore_patterns.is_empty() {
+            eprintln!(
+                "[Arcana] Loaded {} .gitignore patterns — excluded paths will not be recorded.",
+                gitignore_patterns.len()
+            );
+        }
+        let record = Self {
             project_root,
             record_dir,
             seq,
             tree,
+            file_stats: HashMap::new(),
+            gitignore_patterns,
         };
 
         if !head_path.exists() {
-            record.tree = record.scan_project_tree()?;
-            record.take_snapshot()?;
+            // Defer the baseline full-project scan to the first mutation.
+            // Writing HEAD=0 with an empty tree immediately lets the daemon
+            // accept connections; with_recorded_mutations / exec_with_recording
+            // will perform the first scan_project_tree() lazily and take a
+            // snapshot afterwards (via append's SNAPSHOT_INTERVAL trigger).
             fs::write(record.record_dir.join("HEAD"), "0")?;
         }
 
@@ -167,9 +188,29 @@ impl Record {
     }
 
     /// Scan the recoverable project tree and store every file content as a blob.
-    pub fn scan_project_tree(&self) -> io::Result<HashMap<String, String>> {
+    /// Uses the in-memory stat cache to skip unchanged files — O(changed), not O(all).
+    /// On the very first call (seq == 0, no baseline yet) performs the full
+    /// project scan and writes the initial snapshot so subsequent daemon starts
+    /// are instant.
+    pub fn scan_project_tree(&mut self) -> io::Result<HashMap<String, String>> {
+        let is_baseline = self.seq == 0 && self.tree.is_empty();
+        if is_baseline {
+            eprintln!(
+                "[Arcana] Recording system initial baseline scan starting — \
+                 this may take a while for large projects (one-time only)."
+            );
+        }
         let mut tree = HashMap::new();
-        self.scan_dir(&self.project_root, &mut tree)?;
+        self.scan_dir(&self.project_root.clone(), &mut tree)?;
+        if is_baseline {
+            self.tree = tree.clone();
+            self.take_snapshot()?;
+            eprintln!(
+                "[Arcana] Baseline snapshot complete ({} paths tracked).  \
+                 Subsequent mutations will be incremental.",
+                self.tree.len()
+            );
+        }
         Ok(tree)
     }
 
@@ -262,7 +303,7 @@ impl Record {
         Ok(self.seq)
     }
 
-    fn scan_dir(&self, dir: &Path, tree: &mut HashMap<String, String>) -> io::Result<()> {
+    fn scan_dir(&mut self, dir: &Path, tree: &mut HashMap<String, String>) -> io::Result<()> {
         if !dir.exists() {
             return Ok(());
         }
@@ -273,7 +314,7 @@ impl Record {
                 Ok(rel) => rel,
                 Err(_) => continue,
             };
-            if should_skip_path(rel) {
+            if should_skip_path(rel, &self.gitignore_patterns) {
                 continue;
             }
 
@@ -281,9 +322,29 @@ impl Record {
             if file_type.is_dir() {
                 self.scan_dir(&path, tree)?;
             } else if file_type.is_file() {
+                let rel_str = normalize_rel_path(rel);
+                // Stat the file.  If mtime + size match the in-memory cache,
+                // reuse the stored hash — no disk read, no SHA-256.
+                let meta = path.metadata()?;
+                let cur_mtime = file_modified_ns(&meta);
+                let cur_size = meta.len();
+                if let Some(&(cached_mtime, cached_size)) = self.file_stats.get(&rel_str) {
+                    if cached_mtime == cur_mtime && cached_size == cur_size {
+                        if let Some(hash) = self.tree.get(&rel_str) {
+                            let hash = hash.clone();
+                            tree.insert(rel_str.clone(), hash);
+                            // Update stat cache with fresh values (no-op if unchanged)
+                            self.file_stats.insert(rel_str, (cur_mtime, cur_size));
+                            continue; // ← skip read + hash — O(1) instead of O(file_size)
+                        }
+                    }
+                }
+                // File is new or changed — read, hash, store.
                 let content = fs::read(&path)?;
                 let hash = self.store_blob(&content)?;
-                tree.insert(normalize_rel_path(rel), hash);
+                tree.insert(rel_str.clone(), hash);
+                // Cache the stat info for the next incremental scan
+                self.file_stats.insert(rel_str, (cur_mtime, cur_size));
             }
         }
         Ok(())
@@ -479,9 +540,10 @@ fn sorted_removed_paths(
     paths
 }
 
-fn should_skip_path(rel: &Path) -> bool {
+fn should_skip_path(rel: &Path, gitignore_patterns: &[String]) -> bool {
     let path = normalize_rel_path(rel);
-    path == ".git"
+    // Always skip .git and .arcana internals
+    if path == ".git"
         || path.starts_with(".git/")
         || path == ".arcana/git_record"
         || path.starts_with(".arcana/git_record/")
@@ -491,6 +553,57 @@ fn should_skip_path(rel: &Path) -> bool {
         || path.starts_with(".arcana/web_cache/")
         || path == ".arcana/tmp"
         || path.starts_with(".arcana/tmp/")
+    {
+        return true;
+    }
+    // Check .gitignore patterns (if any)
+    for pattern in gitignore_patterns {
+        if glob_match::glob_match(pattern, &path) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Parse .gitignore from the project root and return glob-matchable patterns.
+/// Handles: comments (#), empty lines, trailing `/` for directories,
+/// leading `/` for root-relative patterns.
+fn load_gitignore(project_root: &Path) -> Vec<String> {
+    let path = project_root.join(".gitignore");
+    let content = match fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let mut patterns = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        // Skip comments and blanks
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Skip negation patterns for now (rarely needed for exclusion)
+        if line.starts_with('!') {
+            continue;
+        }
+        let mut pat = line.to_string();
+        // Remove leading / (root-relative — we always match from root)
+        if pat.starts_with('/') {
+            pat = pat[1..].to_string();
+        }
+        // Trailing / → match directory and its contents
+        if pat.ends_with('/') {
+            let dir = pat.trim_end_matches('/');
+            patterns.push(dir.to_string());
+            patterns.push(format!("{}/**", dir));
+        } else if !pat.contains('/') {
+            // Bare filename/glob: match at any depth
+            patterns.push(format!("**/{}", pat));
+            patterns.push(pat);
+        } else {
+            patterns.push(pat);
+        }
+    }
+    patterns
 }
 
 fn normalize_rel_path(path: &Path) -> String {
@@ -508,7 +621,7 @@ fn remove_empty_parent_dirs(project_root: &Path, parent: Option<&Path>) -> io::R
         return Ok(());
     };
     if parent == project_root
-        || should_skip_path(parent.strip_prefix(project_root).unwrap_or(parent))
+        || should_skip_path(parent.strip_prefix(project_root).unwrap_or(parent), &[])
     {
         return Ok(());
     }
@@ -589,6 +702,16 @@ fn hex_sha256(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// Nanosecond-resolution modified time from file metadata.
+/// Falls back to 0 on platforms that don't provide it.
+fn file_modified_ns(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as i64)
+        .unwrap_or(0)
+}
+
 fn now_iso8601() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -619,7 +742,9 @@ mod tests {
         let root = temp_project("baseline");
         fs::write(root.join("README.md"), "original\n").unwrap();
 
-        let _record = Record::open(&root).unwrap();
+        let mut record = Record::open(&root).unwrap();
+        // Trigger the deferred baseline scan so a seq=0 snapshot exists
+        record.scan_project_tree().unwrap();
         fs::remove_file(root.join("README.md")).unwrap();
 
         Record::recover(&root, Some(0)).unwrap();

@@ -350,6 +350,30 @@ fn ensure_workspace(path: &Path) -> Option<PathBuf> {
                 return None;
             }
             eprintln!("[Arcana] Created workspace at {}", arcana_dir.display());
+
+            // Check for .gitignore — if present its patterns will be used
+            // to exclude untracked files from the recording system, making
+            // the baseline scan much faster on large projects.
+            let gitignore = path.join(".gitignore");
+            if gitignore.exists() {
+                let count = std::fs::read_to_string(&gitignore)
+                    .map(|c| {
+                        c.lines()
+                            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+                            .count()
+                    })
+                    .unwrap_or(0);
+                eprintln!(
+                    "[Arcana] Found .gitignore with ~{} patterns — recording system \
+                     will exclude matching paths (data/, logs, etc.).",
+                    count
+                );
+            } else {
+                eprintln!(
+                    "[Arcana] No .gitignore found — all project files will be recorded.  \
+                     Tip: add data/, *.h5, etc. to .gitignore to speed up the baseline scan."
+                );
+            }
             Some(path.to_path_buf())
         }
         _ => {

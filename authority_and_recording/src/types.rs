@@ -43,9 +43,19 @@ pub enum Request {
     #[serde(rename = "exec_confirmed")]
     ExecConfirmed { cmd: String, args: Vec<String> },
     #[serde(rename = "exec_shell")]
-    ExecShell { command: String },
+    ExecShell {
+        command: String,
+        /// When true the command is known-safe (read-only) — skip the
+        /// before/after project-tree scan in exec_with_recording.
+        #[serde(default)]
+        readonly: bool,
+    },
     #[serde(rename = "exec_shell_confirmed")]
-    ExecShellConfirmed { command: String },
+    ExecShellConfirmed {
+        command: String,
+        #[serde(default)]
+        readonly: bool,
+    },
     #[serde(rename = "register_tool")]
     RegisterTool {
         name: String,
