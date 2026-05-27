@@ -127,7 +127,7 @@ my-app/.arcana/
 ├── sessions/
 │   └── index.json              # Session index
 ├── checkpoints/                # Agent checkpoints
-├── git_record/                 # Mutation recording (see authority_and_recording_design.md)
+├── git_record/                 # Mutation recording (git-like, .gitignore-aware)
 │   ├── objects/
 │   ├── actions.jsonl
 │   ├── snapshots/
@@ -138,6 +138,8 @@ my-app/.arcana/
 ```
 
 **Auto-scan**: On first workspace creation, Arcana scans the project tree for documentation files (`.md`, `.rst`, `.txt`, `Cargo.toml`, `package.json`, etc.) and generates an initial `project.md` summary. This gives the agent immediate project context.
+
+**`.gitignore`-aware recording**: If `.gitignore` exists in the project root, the recording system automatically honours it — excluded paths (e.g., `data/`, `*.h5`) are never hashed or stored. The workspace creation message reports the number of patterns found. Without `.gitignore`, all project files are tracked; add one to keep the baseline scan fast on large projects.
 
 ### 1.4 Migration from Other Agents
 

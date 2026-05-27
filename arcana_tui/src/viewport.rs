@@ -712,7 +712,19 @@ impl Viewport {
                         lines.push((msg_idx, Line::from(request_spans)));
                         if let Some(result) = &tc.result {
                             if let Some(extra) = expanded_request_result(result) {
-                                if let Some(diff_start) = extra.find("diff --git") {
+                                // Find the diff section: starts with "diff --git" or
+                                // (for new files) "@@" / lines beginning with +/-
+                                let diff_start = extra
+                                    .find("diff --git")
+                                    .or_else(|| extra.find("\n@@"))
+                                    .or_else(|| {
+                                        // New-file diff: first non-empty line starts with +
+                                        extra.lines().position(|l| l.starts_with('+')).map(|i| {
+                                            // Backtrack to the start of that line
+                                            extra.lines().take(i).map(|l| l.len() + 1).sum()
+                                        })
+                                    });
+                                if let Some(diff_start) = diff_start {
                                     let pre = extra[..diff_start].trim();
                                     let diff_and_rest = &extra[diff_start..];
 

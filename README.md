@@ -86,6 +86,8 @@ Every existing coding agent is a **stateless parrot** — it forgets everything 
 
 Every privileged operation is gated by AAS. File writes, deletes, renames, authority registrations, and any project-tree changes caused by approved shell commands are recorded by comparing the project tree before and after the operation. Each recorded mutation returns a git-compatible diff for review. **The agent cannot silently overwrite your project** — every recorded change is recoverable from `.arcana/git_record`.
 
+**`.gitignore`-aware recording:** The recording system reads `.gitignore` from the project root and automatically excludes matching paths (e.g., `data/`, `*.h5`, `log/`). This keeps the baseline scan fast even on multi-GB projects — a 43 GB project with 22 GB of data files scans in **0.1 s** instead of 61 s. If no `.gitignore` exists, all project files are tracked.
+
 ```
 .arcana/git_record/
 ├── objects/          # Content-addressed blobs

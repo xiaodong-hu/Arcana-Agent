@@ -222,7 +222,7 @@ This means shell commands are recordable without trying to predict which command
 └── HEAD                # latest action sequence number
 ```
 
-Volatile authority runtime data is excluded from recovery records:
+Volatile authority runtime data and `.gitignore`-excluded paths are excluded from recovery records:
 
 ```
 .git/
@@ -231,7 +231,25 @@ Volatile authority runtime data is excluded from recovery records:
 .arcana/authorized_prompt.md
 .arcana/web_cache/
 .arcana/tmp/
+# plus any paths matching .gitignore patterns (data/, *.h5, log/, etc.)
 ```
+
+#### .gitignore Integration
+
+The recording system parses `.gitignore` from the project root on startup.  Patterns are converted to glob-matchable rules and applied during every tree scan.  This means large untracked directories (e.g. `data/`, `figures/`, `log/`) are never hashed or stored in `objects/`.
+
+- **Handled syntax:** comments (`#`), blank lines, trailing `/` for directories, leading `/` for root-relative paths, bare filename globs.
+- **Not handled (yet):** negation patterns (`!`), nested `.gitignore` files in subdirectories.
+- **On workspace creation** the TUI reports how many `.gitignore` patterns were found.
+- **If no `.gitignore` exists** all project files are tracked — add one with `data/`, `*.h5`, etc. to speed up the baseline scan.
+
+**Performance impact** (HyperDet_VMC, 43 GB project, 22 GB in `data/`):
+
+| | Without .gitignore | With .gitignore |
+|---|---|---|
+| Paths tracked | 677 | 29 |
+| Baseline scan | 61.4 s | 0.1 s |
+| Incremental mutation | 0.02 s | 0.01 s |
 
 Project authority configuration, such as `.arcana/authority.toml`, is recordable because registration changes are meaningful project state.
 

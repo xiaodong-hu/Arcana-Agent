@@ -245,12 +245,15 @@ impl Server {
 
         // Generate diff
         let diff = if original.is_empty() {
-            // New file: show all lines as added
-            proposed
-                .lines()
-                .map(|l| format!("+{}", l))
-                .collect::<Vec<_>>()
-                .join("\n")
+            // New file: produce a proper diff with headers so the TUI can
+            // detect it and apply tree-sitter highlighting + __REVIEW__ split.
+            let mut d = format!("diff --git a/{path} b/{path}\n--- /dev/null\n+++ b/{path}\n");
+            let line_count = proposed.lines().count();
+            d.push_str(&format!("@@ -0,0 +1,{line_count} @@\n"));
+            for line in proposed.lines() {
+                d.push_str(&format!("+{line}\n"));
+            }
+            d.trim_end().to_string()
         } else {
             generate_unified_diff(&original, proposed, path)
         };

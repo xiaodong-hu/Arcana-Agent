@@ -357,7 +357,11 @@ fn ensure_workspace(path: &Path) -> Option<PathBuf> {
             let gitignore = path.join(".gitignore");
             if gitignore.exists() {
                 let count = std::fs::read_to_string(&gitignore)
-                    .map(|c| c.lines().filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#')).count())
+                    .map(|c| {
+                        c.lines()
+                            .filter(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))
+                            .count()
+                    })
                     .unwrap_or(0);
                 eprintln!(
                     "[Arcana] Found .gitignore with ~{} patterns — recording system \
